@@ -1,0 +1,14 @@
+{
+  "name": "miniblender-mcp",
+  "version": "1.0.0",
+  "description": "Conector MCP do MiniBlender Mobile: deixa o Claude (Desktop, Code ou claude.ai) controlar o app pelo celular ou PC.",
+  "type": "module",
+  "bin": { "miniblender-mcp": "server.js" },
+  "main": "server.js",
+  "scripts": { "start": "node server.js", "http": "node server.js --http" },
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "ws": "8.18.3"
+  }
+}

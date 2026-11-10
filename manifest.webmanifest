@@ -1,0 +1,15 @@
+{
+  "name": "MiniBlender Mobile",
+  "short_name": "MiniBlender",
+  "description": "Editor 3D no celular inspirado no Blender: modelagem, escultura, personagens, rig, efeitos, animação e conector com o Claude.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#000000",
+  "theme_color": "#000000",
+  "lang": "pt-BR",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
