@@ -785,11 +785,24 @@ function doUndo(){const a=U.u.pop();if(!a)return toast('Nada para desfazer');a.u
 function doRedo(){const a=U.r.pop();if(!a)return toast('Nada para refazer');a.redo();U.u.push(a);afterHistory();}
 function afterHistory(){hud();renderPanel();need=true;}
 const snap=em=>({pos:em.pos.slice(),col:em.col.slice(),faces:em.faces.map(f=>f.slice())});
-function restore(o,s){o.em={pos:s.pos.slice(),col:s.col.slice(),faces:s.faces.map(f=>f.slice())};clearSel();rebuildGeo(o);}
+function restore(o,s){o.em={pos:s.pos.slice(),col:s.col.slice(),faces:s.faces.map(f=>f.slice())};if(s.uv){o.uvCorners=s.uv;o.uvTopology=s.topo;}clearSel();rebuildGeo(o);}
+// UV por canto de face (um [u,v] por vértice de cada face), a partir de o.uvCorners (ordem dos triângulos de buildGeo).
+function faceCornerUVs(faces,corners){
+  if(!corners)return null;const out=[];let t=0;
+  for(const f of faces){const n=f.length,fu=new Array(n);for(let k=1;k<n-1;k++){const a=corners[t],b=corners[t+1],c=corners[t+2];t+=3;if(!a||!b||!c)return null;fu[0]=a;fu[k]=b;fu[k+1]=c;}out.push(fu);}
+  return t===corners.length?out:null;
+}
+function cornersFromFaceUVs(fuv){const out=[];for(const fu of fuv)for(let k=1;k<fu.length-1;k++)out.push(fu[0],fu[k],fu[k+1]);return out;}
+// Catmull-Clark gera, para cada face antiga, um quad por canto: [v, aresta(v,próx), centro, aresta(ant,v)].
+function catmullFaceUVs(fuv){
+  const out=[],mid=(a,b)=>[(a[0]+b[0])/2,(a[1]+b[1])/2];
+  for(const fu of fuv){const n=fu.length;let cu=0,cv2=0;fu.forEach(q=>{cu+=q[0];cv2+=q[1];});const c=[cu/n,cv2/n];for(let k=0;k<n;k++)out.push([fu[k],mid(fu[k],fu[(k+1)%n]),c,mid(fu[(k+n-1)%n],fu[k])]);}
+  return out;
+}
 function editOp(fn){
   const o=S.sel;if(!o)return;
-  const before=snap(o.em),r=fn(o.em);if(r===false)return;
-  const after=snap(o.em);rebuildGeo(o);
+  const before=snap(o.em);before.uv=o.uvCorners;before.topo=o.uvTopology;const r=fn(o.em,o);if(r===false)return;
+  const after=snap(o.em);after.uv=o.uvCorners;after.topo=o.uvTopology;rebuildGeo(o);after.uv=o.uvCorners;after.topo=o.uvTopology;
   push(()=>restore(o,before),()=>restore(o,after));
 }
 function setPosList(o,idx,arr){
@@ -1641,7 +1654,10 @@ function bevelSelectedEdge(em,edge,width,segments){
 function doSubdiv(){
   editOp(em=>{
     if(em.faces.length*4>160000){toast('Malha muito densa para subdividir');return false;}
+    // Com textura aplicada, leva os UVs junto (senão o unwrap automático embaralharia a textura, ex.: a pele do personagem).
+    const o=S.sel,fuv=o.mat.map&&o.uvTopology===em.faces.map(f=>f.join(',')).join(';')?faceCornerUVs(em.faces,o.uvCorners):null;
     const n=catmull(em);em.pos=n.pos;em.col=n.col;em.faces=n.faces;clearSel();
+    if(fuv){o.uvCorners=cornersFromFaceUVs(catmullFaceUVs(fuv));o.uvTopology=em.faces.map(f=>f.join(',')).join(';');}
   });
 }
 function panelSculpt(P){
@@ -1688,7 +1704,9 @@ function openUVEditor(o){
   const paint=e=>{const r=cv.getBoundingClientRect(),x=(e.clientX-r.left)/r.width*1024,y=(e.clientY-r.top)/r.height*1024;ctx.fillStyle=S.paintColor;ctx.beginPath();ctx.arc(x,y,18,0,Math.PI*2);ctx.fill();applyUVTexture(o,cv);};let down=false;
   wrap.append(status,actions,cv,h('div',{class:'note'},'Costuras editáveis (vermelho no atlas):'),edgeSearch,edgeCount,list,row(lb('Cor de pintura'),colorIn(S.paintColor,v=>S.paintColor=v),chip('Limpar textura',()=>{ctx.fillStyle='#fff';ctx.fillRect(0,0,1024,1024);drawUVWire(o,ctx);applyUVTexture(o,cv);} )));
   openSheet('UV profissional — ilhas, costuras e pintura',b=>b.append(wrap));
-  if(!o.uvCorners)uvUnwrap(o);ctx.fillStyle='#fff';ctx.fillRect(0,0,1024,1024);drawUVWire(o,ctx);applyUVTexture(o,cv);refreshList();
+  if(!o.uvCorners)uvUnwrap(o);ctx.fillStyle='#fff';ctx.fillRect(0,0,1024,1024);
+  // Se já existe textura (ex.: pele do personagem), abre ela para pintar por cima em vez de apagar.
+  if(o._uvCanvas)ctx.drawImage(o._uvCanvas,0,0,1024,1024);else{drawUVWire(o,ctx);applyUVTexture(o,cv);}refreshList();
   cv.onpointerdown=e=>{down=true;cv.setPointerCapture(e.pointerId);paint(e);};cv.onpointermove=e=>{if(down)paint(e);};cv.onpointerup=()=>down=false;cv.onpointercancel=()=>down=false;
 }
 
@@ -1789,7 +1807,16 @@ function autoWeights(o){
     const ds=[...best].map(([bone,d])=>({bone,d})).sort((a,b)=>a.d-b.d).slice(0,4);
     const inv=ds.map(x=>1/Math.pow(Math.max(x.d,0.02),4)),sum=inv.reduce((a,b)=>a+b,0)||1;
     arr.push(ds.map((x,i)=>({bone:x.bone,weight:inv[i]/sum})));
-  }return arr;
+  }return smoothWeights(o,arr,rig.bones.length,2);
+}
+// Suaviza os pesos pela vizinhança da malha (dobras de cotovelo/joelho/ombro ficam contínuas).
+function smoothWeights(o,arr,nb,iters){
+  const n=arr.length;if(n*nb>4e6)return arr;const adj=Array.from({length:n},()=>[]);
+  o.em.faces.forEach(f=>{for(let k=0;k<f.length;k++){const a=f[k],b=f[(k+1)%f.length];if(a<n&&b<n){adj[a].push(b);adj[b].push(a);}}});
+  let W=new Float32Array(n*nb);arr.forEach((l,i)=>l.forEach(x=>{W[i*nb+x.bone]+=x.weight;}));
+  for(let it=0;it<iters;it++){const N=new Float32Array(W);for(let i=0;i<n;i++){const A=adj[i];if(!A.length)continue;const k=0.5/A.length;for(let b=0;b<nb;b++){let s=0;for(let j=0;j<A.length;j++)s+=W[A[j]*nb+b];N[i*nb+b]=W[i*nb+b]*0.5+s*k;}}W=N;}
+  const out=new Array(n);for(let i=0;i<n;i++){const l=[];for(let b=0;b<nb;b++){const w=W[i*nb+b];if(w>0.004)l.push({bone:b,weight:w});}out[i]=normalizeWeightList(l.length?l:[{bone:0,weight:1}]);}
+  return out;
 }
 function makeBoneTree(rig){
   const bones=rig.bones.map(b=>{const x=new THREE.Bone();x.name=b.name;return x;});
@@ -1832,7 +1859,8 @@ function buildRigViz(o){
 function refreshRigViz(o,rebind){if(!o.rig)return;if(rebind||!o.rigPreviewBones)initRigDeform(o);else applyRigDeform(o);const segs=boneSegments(o.rig),pts=[];segs.forEach(s=>pts.push(...s.a,...s.e));if(!o.rigViz){buildRigViz(o);return;}o.rigViz.geometry.setAttribute('position',new THREE.Float32BufferAttribute(pts,3));o.rigViz.geometry.computeBoundingSphere();need=true;}
 function createRig(){
   const o=S.sel;if(!o)return toast('Selecione a malha primeiro');
-  if(o.ext&&o.ext.char&&window.characterRig){o.rig=characterRig(o.ext.char);}else o.rig={bones:RIG_BONES.map(b=>({...b,p:b.p.slice(),tail:b.tail&&b.tail.slice(),rot:[0,0,0]})),weights:null,selected:0,poseKeys:{}};o.rig.weights=autoWeights(o);initRigDeform(o);buildRigViz(o);renderPanel();need=true;toast('Rig humanoide criado com 17 ossos e pesos automáticos.');
+  const cr=o.ext&&o.ext.char&&window.characterRig?characterRig(o.ext.char):null;
+  if(cr){o.rig=cr;}else o.rig={bones:RIG_BONES.map(b=>({...b,p:b.p.slice(),tail:b.tail&&b.tail.slice(),rot:[0,0,0]})),weights:null,selected:0,poseKeys:{}};o.rig.weights=autoWeights(o);initRigDeform(o);buildRigViz(o);renderPanel();need=true;toast('Rig humanoide criado com 17 ossos e pesos automáticos.');
 }
 function normalizeWeightList(list){
   const map=new Map();list.forEach(x=>map.set(x.bone,(map.get(x.bone)||0)+Math.max(0,x.weight)));
@@ -1921,22 +1949,44 @@ function solveTwoBoneIK(){
   refreshRigViz(o);if(S.ikTargetOn)ensureIKTarget(o);need=true;
 }
 function setIKTarget(x,y,z){S.ikX=x;S.ikY=y;S.ikZ=z;if(S.ikTargetOn&&S.sel)ensureIKTarget(S.sel);solveTwoBoneIK();}
+// Animações prontas. Funciona com qualquer pose de descanso (T ou A): primeiro abaixa os braços
+// ao lado do corpo e só então balança, dobrando cotovelos e joelhos nos eixos certos.
 function makeRigPreset(kind){
-  const o=S.sel;if(!o||!o.rig)return;const r=ensureRig(o),idx={Pelvis:0,Coluna:1,Peito:2,Braco_E:5,Antebraco_E:6,Braco_D:8,Antebraco_D:9,Coxa_E:11,Canela_E:12,Coxa_D:14,Canela_D:15};
-  const frames=kind==='run'?[0,4,8,12,16]:[0,6,12,18,24];r.poseKeys={};
-  const put=(frame,phase)=>{const e=Array.from({length:r.bones.length},()=>[0,0,0]);
-    if(kind==='walk'||kind==='run'){
-      const amp=kind==='run'?0.9:0.55,leg=Math.sin(phase)*amp,arm=-leg*0.8;
-      e[idx.Coxa_E][0]=leg;e[idx.Coxa_D][0]=-leg;e[idx.Braco_E][0]=arm;e[idx.Braco_D][0]=-arm;
-      e[idx.Antebraco_E][0]=kind==='run'?-0.45:0.08;e[idx.Antebraco_D][0]=kind==='run'?-0.45:0.08;e[idx.Coluna][2]=Math.sin(phase)*0.035;
+  const o=S.sel;if(!o||!o.rig)return;const r=ensureRig(o),ix=n=>r.bones.findIndex(b=>b.name===n),I={};
+  ['Pelvis','Coluna','Peito','Pescoco','Cabeca','Braco_E','Antebraco_E','Mao_E','Braco_D','Antebraco_D','Mao_D','Coxa_E','Canela_E','Pe_E','Coxa_D','Canela_D','Pe_D'].forEach(n=>I[n]=ix(n));
+  if(I.Coxa_E<0||I.Braco_E<0)return toast('Esta animação precisa do esqueleto humanoide padrão');
+  const QX=a=>new THREE.Quaternion().setFromAxisAngle(AX.x,a),QY=a=>new THREE.Quaternion().setFromAxisAngle(AX.y,a),QZ=a=>new THREE.Quaternion().setFromAxisAngle(AX.z,a);
+  // ângulo para o braço ficar pendurado (quase vertical) a partir da pose de descanso
+  const hang={};for(const s of ['E','D']){const d=r.bones[I['Antebraco_'+s]].p,out=Math.atan2(Math.abs(d[0]),-d[1]);hang[s]=(out-0.14)*(d[0]<0?1:-1);}
+  const N=kind==='jump'?7:9,len=kind==='run'?16:kind==='jump'?28:24,run=kind==='run';r.poseKeys={};
+  const pelvisRest=r.bones[I.Pelvis].p.slice();
+  for(let k=0;k<N;k++){
+    const q=r.bones.map(()=>new THREE.Quaternion()),f=Math.round(k*len/(N-1)),set=(n,quat)=>{if(I[n]>=0)q[I[n]]=quat;};
+    if(kind==='walk'||run){
+      const ph=k/(N-1)*Math.PI*2,amp=run?0.85:0.48;
+      for(const [s,sg] of [['E',1],['D',-1]]){
+        const p=ph+(sg>0?0:Math.PI),sw=Math.sin(p);
+        // perna: coxa balança; joelho dobra quando a perna vem para a frente (fase de balanço)
+        const knee=Math.max(0,Math.sin(p+Math.PI*0.35))*(run?1.5:0.95)+(run?0.25:0.06);
+        set('Coxa_'+s,QX(sw*amp-(run?0.25:0.05)));set('Canela_'+s,QX(knee));set('Pe_'+s,QX(-0.15+Math.max(0,-sw)*0.35-knee*0.15));
+        // braço oposto à perna, com cotovelo levemente dobrado (bem dobrado na corrida)
+        const arm=-sw*(run?0.9:0.42),el=run?1.45:0.22+Math.max(0,-sw)*0.25,h=hang[s];
+        set('Braco_'+s,QX(arm).multiply(QZ(h)));
+        // cotovelo dobra para a frente: eixo X do mundo expresso no referencial do braço já abaixado
+        set('Antebraco_'+s,new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(Math.cos(h),-Math.sin(h),0),-el));
+      }
+      set('Pelvis',QY(Math.sin(ph)*(run?0.12:0.07)).multiply(QX(run?0.12:0.03)));set('Coluna',QY(-Math.sin(ph)*(run?0.16:0.09)).multiply(QZ(Math.sin(ph)*0.02)));
+      set('Peito',QY(-Math.sin(ph)*0.05));set('Cabeca',QY(Math.sin(ph)*0.05).multiply(QX(run?-0.1:0)));
     }else{
-      const lift=frame===6?1:frame===12?0.65:frame===18?0.12:0;
-      e[idx.Braco_E][0]=-lift*1.25;e[idx.Braco_D][0]=-lift*1.25;e[idx.Coxa_E][0]=lift*0.45;e[idx.Coxa_D][0]=lift*0.45;e[idx.Canela_E][0]=-lift*0.35;e[idx.Canela_D][0]=-lift*0.35;e[idx.Coluna][0]=-lift*0.12;
+      // salto: agacha, impulsiona, voa, aterrissa
+      const cr=[0,0.9,0.15,0.05,0.25,0.7,0][k],up=[0,0,1,1,0.6,0,0][k];
+      for(const s of ['E','D']){const h=hang[s];set('Coxa_'+s,QX(-cr*1.0));set('Canela_'+s,QX(cr*1.7));set('Pe_'+s,QX(-cr*0.6+up*0.5));
+        set('Braco_'+s,QX(cr*0.7-up*2.4).multiply(QZ(h)));set('Antebraco_'+s,new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(Math.cos(h),-Math.sin(h),0),-0.3-cr*0.6));}
+      set('Coluna',QX(cr*0.35-up*0.1));set('Cabeca',QX(-cr*0.2));
     }
-    r.poseKeys[frame]=e.map(v=>new THREE.Quaternion().setFromEuler(new THREE.Euler(...v,'XYZ')).toArray());
-  };
-  frames.forEach((f,i)=>put(f,kind==='jump'?i:Math.PI*2*i/(frames.length-1)));
-  S.endFrame=kind==='run'?16:24;S.frame=0;applyRigFrame(o,0);if(TL.sl)TL.sl.max=S.endFrame;renderPanel();toast('Animação '+({walk:'Caminhada',run:'Corrida',jump:'Salto'}[kind])+' criada. Ajuste as poses e grave novas chaves.');
+    r.poseKeys[f]=q.map(x=>x.toArray());
+  }
+  S.endFrame=len;S.frame=0;applyRigFrame(o,0);if(TL.sl)TL.sl.max=S.endFrame;renderPanel();toast('Animação '+({walk:'Caminhada',run:'Corrida',jump:'Salto'}[kind])+' criada. Ajuste as poses e grave novas chaves.');
 }
 function addChildBone(){const o=S.sel;if(!o||!o.rig)return;const r=ensureRig(o),par=r.selected,id=r.bones.length;r.bones.push({name:'Osso_'+(id+1),parent:par,p:[0,-0.2,0],rot:[0,0,0]});r.selected=id;r.weights.forEach(list=>list.push({bone:id,weight:0}));refreshRigViz(o,true);renderPanel();toast('Osso filho adicionado');}
 function panelRig(P){

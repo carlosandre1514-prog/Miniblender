@@ -26,7 +26,7 @@ async function call(name, args, { expectError = false, save } = {}) {
 }
 const scene = JSON.parse((await call('get_scene')).content[0].text);
 const cube = scene.objects[0].id;
-await call('create_character', { preset: 'Homem forte', position: [0, 0, 0] });
+await call('create_character', { preset: 'Fisiculturista', position: [0, 0, 0], params: { hair: 'fios', detail: { 'measure-waist-circ': -0.3 } } });
 const s2 = JSON.parse((await call('get_scene')).content[0].text); const ch = s2.objects.find(o => o.character).id;
 await call('transform_object', { id: cube, position: [2, 0.6, 0], rotation_deg: [0, 30, 0] });
 await call('set_material', { id: cube, color: '#ff5500', roughness: 0.3, metalness: 0.2 });
@@ -45,6 +45,11 @@ await call('add_light', { type: 'spot', position: [2, 4, 3], target: [0, 1, 0], 
 await call('set_world', { sky: 'gradient', sky_top: '#3b5b9c', sky_bottom: '#0a0a12', fog: 0.02 });
 await call('add_particles', { preset: 'fire', emitter_id: cube });
 await call('add_particles', { preset: 'snow' });
+await call('add_particles', { preset: 'lightning', emitter_id: cube, params: { period: 30 } });
+await call('add_particles', { preset: 'energy', emitter_id: sph });
+await call('add_particles', { preset: 'shot', emitter_id: sph, offset: [0.5, 0, 0] });
+await call('add_particles', { preset: 'ocean', params: { size: 12, y: -0.5 } });
+await call('add_lawn', { size: 3, position: [0, 0, -4], count: 3000 });
 await call('add_fur', { id: sph, style: 'pelucia', count: 1500 });
 await call('set_pose', { id: ch, bones: { Braco_E: [0, 0, -50], Antebraco_E: [0, 0, -40] }, key_frame: 0 });
 await call('animate', { id: ch, action: 'rig_walk' });
@@ -65,9 +70,10 @@ await call('project', { action: 'save', name: 'teste-e2e' });
 await call('miniblender_status');
 console.log('page errors:', errs);
 // o projeto salvo reabre?
-await page.reload(); await page.waitForTimeout(3000);
+await page.reload(); await page.waitForTimeout(4500);
 const n = await page.evaluate(() => ({ objs: S.objs.length, name: S.projectName, fx: FX.systems.length, lights: WORLD.lights.length }));
 console.log('após recarregar:', JSON.stringify(n));
+const ch2 = await page.evaluate(() => { const o = S.objs.find(x => x.ext && x.ext.char); return o ? { tex: !!o.mat.map, rig: !!o.rig, fur: !!o._fur, v: o.em.pos.length / 3 } : null; }); console.log('personagem após recarregar:', JSON.stringify(ch2));
 await page.screenshot({ path: `${OUT}/app.png` });
 console.log(fails ? `${fails} FALHA(S)` : 'TUDO OK');
 await client.close(); await b.close(); process.exit(fails || errs.length ? 1 : 0);

@@ -1,100 +1,273 @@
 'use strict';
 /* =====================================================================
-   MiniBlender · Criador de personagem humanoide + Remesh por voxel
-   - Corpo gerado por SDF (cápsulas/elipsoides com união suave) e
-     convertido em malha de quads por Surface Nets: pronto para esculpir,
-     subdividir e animar.
-   - Rig de 17 ossos ajustado às proporções + pesos automáticos.
-   - Roupas/cabelo por região (cores de vértice) e olhos.
-   - Remesh (voxel) para qualquer malha fechada.
+   MiniBlender · Personagem humano realista + Remesh por voxel
+
+   O corpo vem da malha base do MakeHuman (www.makehumancommunity.org,
+   assets CC0), modelada a partir de medidas antropométricas reais:
+   ~13,5 mil vértices com rosto, orelhas, dedos e olhos. As proporções
+   mudam com os morphs originais (gênero, idade, músculo, peso, etnia e
+   medidas como busto/cintura/quadril). assets/human.bin.gz é gerado por
+   tools/build_human.py.
+   - Rig de 17 ossos posicionado pelas juntas da própria malha.
+   - Textura de pele real (rosto, lábios, sobrancelhas) com tom ajustável,
+     roupas pintadas e olhos.
    ===================================================================== */
 (function(){
 const V=(x,y,z)=>new THREE.Vector3(x,y,z);
-const CHAR_DEF={height:1.75,build:0.5,muscle:0.3,shoulders:1,hips:1,chest:1,bust:0,belly:0,head:1,neck:1,arms:1,legs:1,
-  hair:'curto',skin:'#e0ac8a',shirt:'#3a7bd5',pants:'#2b2f3a',shoes:'#1a1a1a',hairColor:'#2b1a0e',eyes:true,clothes:true,res:72,cartoon:0};
+let HUMAN=null,loading=null;
+const IMG={};
+function loadImage(name){return IMG[name]?Promise.resolve(IMG[name]):new Promise((res,rej)=>{const im=new Image();im.onload=()=>{IMG[name]=im;res(im);};im.onerror=()=>rej(new Error('não consegui carregar assets/'+name+'.jpg'));im.src=new URL('assets/'+name+'.jpg',document.baseURI).href;});}
+async function loadHuman(){
+  if(HUMAN)return HUMAN;if(loading)return loading;
+  loading=(async()=>{
+    const resp=await fetch(new URL('assets/human.bin.gz',document.baseURI));if(!resp.ok)throw new Error('assets/human.bin.gz não encontrado ('+resp.status+')');
+    let buf;
+    // Alguns servidores já descomprimem .gz sozinhos (Content-Encoding); confere a assinatura gzip.
+    const raw=await resp.arrayBuffer(),sig=new Uint8Array(raw,0,2);
+    if(sig[0]===0x1f&&sig[1]===0x8b){if(!window.DecompressionStream)throw new Error('Navegador sem DecompressionStream; atualize o navegador');buf=await new Response(new Blob([raw]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();}else buf=raw;
+    const hl=new DataView(buf).getUint32(0,true),head=JSON.parse(new TextDecoder().decode(new Uint8Array(buf,4,hl))),base=4+hl;
+    const T={float32:Float32Array,uint16:Uint16Array,int16:Int16Array,uint8:Uint8Array,int8:Int8Array};
+    const arr=name=>{const m=head.arrays[name];if(!m)return null;const C=T[m.t];
+      if(m.sh){const b=new Uint8Array(buf,base+m.o,m.n*2),out=new C(m.n),ob=new Uint8Array(out.buffer);for(let i=0;i<m.n;i++){ob[2*i]=b[i];ob[2*i+1]=b[m.n+i];}return out;}
+      return new C(buf.slice(base+m.o,base+m.o+m.n*C.BYTES_PER_ELEMENT));};
+    const H={head,pos:arr('pos'),quads:arr('quads'),fmat:arr('fmat'),uv:arr('uv'),flags:arr('flags'),macro:{},detail:{}};
+    head.macro.forEach(m=>{if(m.bits)H.macro[m.name]={v:arr('m_'+m.name),s:m.scale};});
+    head.detail.forEach(m=>{H.detail[m.name]={i:arr('d_i_'+m.name),v:arr('d_v_'+m.name),s:m.scale};});
+    // UV por canto de triângulo, na ordem em que buildGeo triangula os quads (a,b,c),(a,c,d).
+    const nF=head.nF,uc=new Array(nF*6);for(let f=0;f<nF;f++){const q=k=>[H.uv[f*8+k*2]/65535,H.uv[f*8+k*2+1]/65535];uc[f*6]=q(0);uc[f*6+1]=q(1);uc[f*6+2]=q(2);uc[f*6+3]=q(0);uc[f*6+4]=q(2);uc[f*6+5]=q(3);}
+    H.uvCorners=uc;H.faces=[];for(let f=0;f<nF;f++)H.faces.push([H.quads[4*f],H.quads[4*f+1],H.quads[4*f+2],H.quads[4*f+3]]);
+    H.topology=H.faces.map(f=>f.join(',')).join(';');
+    // Couro cabeludo: faces do corpo com 3+ vértices junto do capacete de cabelo E acima da base do crânio
+    // (o grupo helper-hair também tem marcadores soltos pelo corpo, que não contam).
+    const hj=head.joints.Cabeca;let hy=0;hj.forEach(i=>hy+=H.pos[3*i+1]);hy/=hj.length;H.scalp=new Uint8Array(nF);H.scalpList=[];
+    for(let f=0;f<nF;f++){if(H.fmat[f]!==0)continue;const q=H.faces[f];let sc=0,y=0;q.forEach(v=>{if(H.flags[v]&1)sc++;y+=H.pos[3*v+1];});if(sc>=3&&y/4>hy+0.02){H.scalp[f]=1;H.scalpList.push(f);}}
+    await Promise.all(['skin_f','skin_m','skin_f_suit','skin_m_suit'].map(loadImage));
+    // Completa o couro cabeludo: faces vizinhas (acima da base do crânio) cujo centro cai em cabelo pintado na textura original.
+    {const cv2=document.createElement('canvas');cv2.width=cv2.height=256;const cx=cv2.getContext('2d');cx.drawImage(IMG.skin_m_suit,0,0,256,256);const px=cx.getImageData(0,0,256,256).data;
+      const dark=f=>{let u=0,v=0;for(let k=0;k<4;k++){u+=H.uv[f*8+2*k];v+=H.uv[f*8+2*k+1];}const x=Math.min(255,u/4/65535*256|0),y=Math.min(255,v/4/65535*256|0),i=(y*256+x)*4;return (px[i]+px[i+1]+px[i+2])/765<0.42;};
+      const cy=f=>{let y=0;H.faces[f].forEach(v=>y+=H.pos[3*v+1]);return y/4;};
+      for(let pass=0;pass<4;pass++){const vs=new Set();H.scalpList.forEach(f=>H.faces[f].forEach(v=>vs.add(v)));
+        for(let f=0;f<nF;f++){if(H.scalp[f]||H.fmat[f]!==0||cy(f)<hy+0.02)continue;if(H.faces[f].some(v=>vs.has(v))&&dark(f)){H.scalp[f]=1;H.scalpList.push(f);}}}}
+    HUMAN=H;return H;
+  })();
+  try{return await loading;}catch(e){loading=null;throw e;}
+}
+window.loadHuman=loadHuman;
+
+const CHAR_DEF={gender:1,age:25,muscle:0.5,weight:0.5,height:0,race:'caucasian',detail:{},
+  skin:'#e3b392',outfit:'roupa',shirt:'#3a7bd5',pants:'#2b2f3a',shoes:'#1c1c1c',hair:'curto',hairColor:'#2b1a0e',eyeColor:'#5b3a1e'};
 const PRESETS={
-  'Adulto':{},
-  'Mulher':{height:1.65,shoulders:0.86,hips:1.12,bust:0.7,muscle:0.15,build:0.42,hair:'longo',shirt:'#c2185b'},
-  'Homem forte':{height:1.85,shoulders:1.2,muscle:0.9,build:0.65,chest:1.15,hair:'curto',shirt:'#2e7d32'},
-  'Criança':{height:1.15,head:1.35,legs:0.85,arms:0.92,build:0.5,muscle:0,shoulders:0.9,hair:'curto',shirt:'#ff9800'},
-  'Cartoon':{height:1.3,head:1.9,legs:0.75,arms:0.85,build:0.6,cartoon:1,hair:'volumoso',shirt:'#e53935'},
-  'Magro alto':{height:2.0,build:0.25,muscle:0.1,shoulders:0.95,legs:1.08,hair:'careca'},
-  'Robusto':{height:1.7,build:0.9,belly:1,muscle:0.2,shoulders:1.1,hips:1.15,hair:'curto',shirt:'#795548'}
+  'Homem':{gender:1},
+  'Mulher':{gender:0,shirt:'#c2185b'},
+  'Atleta (H)':{gender:1,muscle:0.85,weight:0.45,detail:{'torso-vshape':0.5},outfit:'traje'},
+  'Atleta (M)':{gender:0,muscle:0.8,weight:0.4,outfit:'traje'},
+  'Fisiculturista':{gender:1,muscle:1,weight:0.55,detail:{'torso-muscle-pectoral':0.8,'torso-muscle-dorsi':0.8,'measure-upperarm-circ':0.6,'torso-vshape':0.8},shirt:'#2e7d32'},
+  'Acima do peso':{gender:1,muscle:0.3,weight:1,shirt:'#795548'},
+  'Magra':{gender:0,muscle:0.3,weight:0.1,shirt:'#7e57c2'},
+  'Idoso':{gender:1,age:75,muscle:0.3,weight:0.55,hairColor:'#c9c9c9',shirt:'#546e7a'},
+  'Idosa':{gender:0,age:75,muscle:0.25,weight:0.55,hairColor:'#d6d6d6',shirt:'#5e7f6b'},
+  'Menino':{gender:1,age:10,shirt:'#ff9800'},
+  'Menina':{gender:0,age:10,shirt:'#ec407a'}
 };
 window.CHAR_PRESETS=PRESETS;
+const SKIN_BY_RACE={caucasian:'#e3b392',asian:'#dcae82',african:'#7b4a2e'};
 
-/* ---------- Esqueleto a partir dos parâmetros ---------- */
-function joints(c){
-  const H=c.height,leg=c.legs,arm=c.arms,ang=24*Math.PI/180,J={};
-  // Proporções humanas (fração da altura H): quadril ~0.50H, ombros ~0.80H, topo da cabeça = H.
-  J.ankleY=0.045*H;J.hipJ=J.ankleY+0.455*H*leg;
-  J.pelvis=V(0,J.hipJ+0.03*H,0);J.spine=J.pelvis.clone().add(V(0,0.09*H,0));J.chest=J.spine.clone().add(V(0,0.09*H,0));
-  J.neck=J.chest.clone().add(V(0,0.11*H,0));J.headB=J.neck.clone().add(V(0,0.045*H*c.neck,0));
-  J.hr=0.062*H*c.head/(c.cartoon?1.15:1);J.headC=J.headB.clone().add(V(0,J.hr*0.95,0.006*H));
-  [-1,1].forEach(s=>{const k=s<0?'E':'D',d=V(s*Math.cos(ang),-Math.sin(ang),0);
-    J['sh'+k]=J.chest.clone().add(V(s*0.12*H*c.shoulders,0.085*H,0));J['el'+k]=J['sh'+k].clone().addScaledVector(d,0.165*H*arm);J['wr'+k]=J['el'+k].clone().addScaledVector(d,0.145*H*arm);J['ha'+k]=J['wr'+k].clone().addScaledVector(d,0.095*H*arm);J['dir'+k]=d;
-    J['hp'+k]=J.pelvis.clone().add(V(s*0.06*H*c.hips,-0.05*H,0));J['kn'+k]=V(J['hp'+k].x*0.95,J.ankleY+0.235*H*leg,0.006*H);J['an'+k]=V(J['hp'+k].x*0.92,J.ankleY,-0.01*H);J['to'+k]=J['an'+k].clone().add(V(0,-0.03*H,0.11*H));});
-  return J;
+/* ---------- Pesos dos morphs (mesmas fórmulas do MakeHuman) ---------- */
+function macroWeights(c){
+  const g=clamp(c.gender,0,1),yrs=clamp(c.age,10,90),a=yrs<25?0.1875+(yrs-10)/15*(0.5-0.1875):0.5+(yrs-25)/65*0.5;
+  const age={child:a<0.5?Math.max(0,1-(a-0.1875)*3.2):0,old:a>0.5?(a-0.5)*2:0};age.young=1-age.child-age.old;
+  const tri=v=>{const mx=Math.max(0,v*2-1),mn=Math.max(0,1-v*2);return {min:mn,max:mx,average:1-mx-mn};},mu=tri(clamp(c.muscle,0,1)),wt=tri(clamp(c.weight,0,1));
+  const race=c.race==='mista'?{caucasian:1/3,asian:1/3,african:1/3}:{caucasian:0,asian:0,african:0,[c.race||'caucasian']:1};
+  const W={};
+  for(const [gn,gv] of [['female',1-g],['male',g]])for(const an of ['child','young','old']){
+    for(const m of ['min','average','max'])for(const w of ['min','average','max'])W[`universal-${gn}-${an}-${m}muscle-${w}weight`]=gv*age[an]*mu[m]*wt[w];
+    for(const r in race)W[`${r}-${gn}-${an}`]=gv*age[an]*race[r];
+  }
+  return W;
 }
-// Rig nos mesmos índices/nomes do rig padrão (as animações prontas e o IK continuam funcionando).
-function characterRig(c){
-  const J=joints(c),rel=(a,b)=>b.clone().sub(a).toArray();
-  const B=[
-    {name:'Pelvis',parent:-1,p:J.pelvis.toArray()},{name:'Coluna',parent:0,p:rel(J.pelvis,J.spine)},{name:'Peito',parent:1,p:rel(J.spine,J.chest)},
-    {name:'Pescoco',parent:2,p:rel(J.chest,J.neck)},{name:'Cabeca',parent:3,p:rel(J.neck,J.headB),tail:[0,J.hr*2.1,0]},
-    {name:'Braco_E',parent:2,p:rel(J.chest,J.shE)},{name:'Antebraco_E',parent:5,p:rel(J.shE,J.elE)},{name:'Mao_E',parent:6,p:rel(J.elE,J.wrE),tail:rel(J.wrE,J.haE)},
-    {name:'Braco_D',parent:2,p:rel(J.chest,J.shD)},{name:'Antebraco_D',parent:8,p:rel(J.shD,J.elD)},{name:'Mao_D',parent:9,p:rel(J.elD,J.wrD),tail:rel(J.wrD,J.haD)},
-    {name:'Coxa_E',parent:0,p:rel(J.pelvis,J.hpE)},{name:'Canela_E',parent:11,p:rel(J.hpE,J.knE)},{name:'Pe_E',parent:12,p:rel(J.knE,J.anE),tail:rel(J.anE,J.toE)},
-    {name:'Coxa_D',parent:0,p:rel(J.pelvis,J.hpD)},{name:'Canela_D',parent:14,p:rel(J.hpD,J.knD)},{name:'Pe_D',parent:15,p:rel(J.knD,J.anD),tail:rel(J.anD,J.toD)}
-  ];
+function morph(c){
+  const H=HUMAN,n=H.head.nT,P=new Float32Array(H.pos),W=macroWeights(c);
+  for(const k in W){const w=W[k],t=H.macro[k];if(!t||w<1e-4)continue;const s=t.s*w,v=t.v;for(let i=0;i<n*3;i++)P[i]+=v[i]*s;}
+  const D={...(c.detail||{})};
+  // busto: só faz sentido na proporção feminina
+  if(c.bust){D['breast-'+(c.bust>0?'maxcup':'mincup')]=-Math.abs(c.bust)*(1-clamp(c.gender,0,1));}
+  for(const k in D){const val=D[k];if(!val)continue;
+    const t=k.startsWith('breast-')?H.detail[k]:H.detail[k+(val>0?'-incr':'-decr')];if(!t)continue;const s=t.s*Math.abs(val),ix=t.i,v=t.v;
+    for(let j=0;j<ix.length;j++){const i=ix[j]*3;P[i]+=v[3*j]*s;P[i+1]+=v[3*j+1]*s;P[i+2]+=v[3*j+2]*s;}}
+  // altura: escala uniforme sobre a altura natural do morph; pés no chão
+  let minY=Infinity,maxY=-Infinity;for(let i=0;i<H.head.nR;i++){const y=P[3*i+1];if(y<minY)minY=y;if(y>maxY)maxY=y;}
+  const natural=maxY-minY,sc=c.height>0?c.height/natural:1;
+  for(let i=0;i<n;i++){P[3*i]*=sc;P[3*i+1]=(P[3*i+1]-minY)*sc;P[3*i+2]*=sc;}
+  return {P,height:natural*sc,natural};
+}
+function jointPos(P){const J={};for(const k in HUMAN.head.joints){const ids=HUMAN.head.joints[k],v=V(0,0,0);ids.forEach(i=>v.add(V(P[3*i],P[3*i+1],P[3*i+2])));J[k]=v.divideScalar(ids.length);}return J;}
+// Rig nos mesmos índices/nomes do rig padrão (IK e animações prontas funcionam).
+function rigFromJoints(J){
+  const rel=(a,b)=>b.clone().sub(a).toArray(),B=[
+    {name:'Pelvis',parent:-1,p:J.Pelvis.toArray()},{name:'Coluna',parent:0,p:rel(J.Pelvis,J.Coluna)},{name:'Peito',parent:1,p:rel(J.Coluna,J.Peito)},
+    {name:'Pescoco',parent:2,p:rel(J.Peito,J.Pescoco)},{name:'Cabeca',parent:3,p:rel(J.Pescoco,J.Cabeca),tail:rel(J.Cabeca,J.Cabeca_tail)}];
+  for(const s of ['E','D']){const i0=B.length;
+    B.push({name:'Braco_'+s,parent:2,p:rel(J.Peito,J['Braco_'+s])},{name:'Antebraco_'+s,parent:i0,p:rel(J['Braco_'+s],J['Antebraco_'+s])},{name:'Mao_'+s,parent:i0+1,p:rel(J['Antebraco_'+s],J['Mao_'+s]),tail:rel(J['Mao_'+s],J['Mao_'+s+'_tail'])});}
+  for(const s of ['E','D']){const i0=B.length;
+    B.push({name:'Coxa_'+s,parent:0,p:rel(J.Pelvis,J['Coxa_'+s])},{name:'Canela_'+s,parent:i0,p:rel(J['Coxa_'+s],J['Canela_'+s])},{name:'Pe_'+s,parent:i0+1,p:rel(J['Canela_'+s],J['Pe_'+s]),tail:rel(J['Pe_'+s],J['Pe_'+s+'_tail'])});}
   return {bones:B.map(b=>({...b,rot:[0,0,0]})),weights:null,selected:0,poseKeys:{}};
 }
-window.characterRig=characterRig;
+window.characterRig=c=>HUMAN?rigFromJoints(jointPos(morph(c).P)):null;
 
-/* ---------- SDF ---------- */
-const smin=(a,b,k)=>{const h=Math.max(k-Math.abs(a-b),0)/k;return Math.min(a,b)-h*h*k*0.25;};
-function rcone(px,py,pz,a,b,r1,r2){const bx=b.x-a.x,by=b.y-a.y,bz=b.z-a.z,qx=px-a.x,qy=py-a.y,qz=pz-a.z,l2=bx*bx+by*by+bz*bz||1;let t=(qx*bx+qy*by+qz*bz)/l2;t=t<0?0:t>1?1:t;const dx=qx-bx*t,dy=qy-by*t,dz=qz-bz*t;return Math.sqrt(dx*dx+dy*dy+dz*dz)-(r1+(r2-r1)*t);}
-function ell(px,py,pz,c,rx,ry,rz){const x=(px-c.x)/rx,y=(py-c.y)/ry,z=(pz-c.z)/rz,k0=Math.sqrt(x*x+y*y+z*z),k1=Math.sqrt(x*x/(rx*rx)+y*y/(ry*ry)+z*z/(rz*rz));return k1<1e-9?-Math.min(rx,ry,rz):k0*(k0-1)/k1;}
-function bodySDF(c){
-  const J=joints(c),H=c.height,t=0.75+c.build*0.6,mu=c.muscle,k=0.045*H,hr=J.hr;
-  return (x,y,z)=>{
-    let d=ell(x,y,z,J.pelvis.clone().add(V(0,-0.005*H,0)),0.1*H*c.hips*t,0.07*H,0.075*H*t);
-    d=smin(d,ell(x,y,z,J.spine,(0.085+c.belly*0.035)*H*t,0.075*H,(0.064+c.belly*0.05)*H*t),k);
-    d=smin(d,ell(x,y,z,J.chest.clone().add(V(0,0.035*H,0)),0.11*H*c.shoulders*(0.85+0.15*t)*(1+mu*0.08)*c.chest,0.085*H,0.07*H*t*(1+mu*0.12)*c.chest),k);
-    if(c.bust>0)for(const s of [-1,1])d=smin(d,ell(x,y,z,J.chest.clone().add(V(s*0.045*H,0.02*H,0.055*H*t)),0.045*H*c.bust,0.04*H*c.bust,0.04*H*c.bust),0.03*H);
-    d=smin(d,rcone(x,y,z,J.chest,J.headB,0.035*H,0.03*H),0.03*H);
-    // cabeça + mandíbula + nariz + orelhas
-    let hd=ell(x,y,z,J.headC,hr*0.86,hr*1.05,hr*0.98);
-    hd=smin(hd,ell(x,y,z,J.headC.clone().add(V(0,-hr*0.55,hr*0.22)),hr*0.55,hr*0.42,hr*0.6),hr*0.35);
-    hd=smin(hd,ell(x,y,z,J.headC.clone().add(V(0,-hr*0.12,hr*0.95)),hr*0.12,hr*0.18,hr*0.16),hr*0.12);
-    for(const s of [-1,1])hd=smin(hd,ell(x,y,z,J.headC.clone().add(V(s*hr*0.86,-hr*0.05,0)),hr*0.1,hr*0.22,hr*0.14),hr*0.08);
-    if(c.hair==='curto'||c.hair==='volumoso'||c.hair==='longo'){
-      const g=c.hair==='volumoso'?1.22:1.07,hc=J.headC.clone().add(V(0,hr*0.1,-hr*0.08));
-      let hair=ell(x,y,z,hc,hr*0.9*g,hr*1.02*g,hr*1.02*g);
-      // corta a parte do rosto e de baixo
-      hair=Math.max(hair,-(y-(J.headC.y-hr*0.15)),z-(J.headC.z+hr*0.45)+(y-J.headC.y)*0.6);
-      if(c.hair==='longo')hair=smin(hair,ell(x,y,z,J.headC.clone().add(V(0,-hr*0.9,-hr*0.55)),hr*0.95,hr*1.3,hr*0.45),hr*0.3);
-      hd=smin(hd,hair,hr*0.1);
-    }
-    d=smin(d,hd,0.025*H);
-    for(const k2 of ['E','D']){
-      const r=t*(1+mu*0.25);
-      d=smin(d,ell(x,y,z,J['sh'+k2],0.05*H*r,0.045*H*r,0.045*H*r),0.03*H);
-      d=smin(d,rcone(x,y,z,J['sh'+k2],J['el'+k2],0.04*H*r,0.031*H*t),0.025*H);
-      d=smin(d,rcone(x,y,z,J['el'+k2],J['wr'+k2],0.033*H*t*(1+mu*0.15),0.022*H*t),0.02*H);
-      // mão (palma achatada + polegar)
-      const w=J['wr'+k2],ha=J['ha'+k2],dir=J['dir'+k2];
-      d=smin(d,ell(x,y,z,w.clone().lerp(ha,0.45),0.045*H,0.03*H,0.02*H),0.015*H);
-      d=smin(d,rcone(x,y,z,w.clone().lerp(ha,0.6),ha,0.02*H,0.014*H),0.012*H);
-      d=smin(d,rcone(x,y,z,w.clone().addScaledVector(dir,0.015*H).add(V(0,0,0.015*H)),w.clone().addScaledVector(dir,0.045*H).add(V(0,-0.01*H,0.035*H)),0.011*H,0.008*H),0.01*H);
-      d=smin(d,rcone(x,y,z,J['hp'+k2],J['kn'+k2],0.068*H*t*(1+mu*0.1),0.045*H*t),0.04*H);
-      d=smin(d,ell(x,y,z,J['kn'+k2].clone().add(V(0,-0.075*H,-0.012*H)),0.043*H*t*(1+mu*0.15),0.07*H,0.045*H*t*(1+mu*0.15)),0.03*H);
-      d=smin(d,rcone(x,y,z,J['kn'+k2],J['an'+k2],0.044*H*t,0.028*H),0.02*H);
-      d=smin(d,rcone(x,y,z,J['an'+k2].clone().add(V(0,-0.02*H,-0.01*H)),J['to'+k2],0.03*H,0.026*H),0.02*H);
-    }
-    return d;
-  };
+/* ---------- Textura: pele real + tom + roupas + cabelo + olhos ---------- */
+const TEX=1024;
+// Olhos: esclera no retângulo reservado do atlas e uma íris onde o UV da frente de cada olho cai.
+function drawEyes(ctx,r,color,irises){
+  const x=r[0]*TEX,y=r[1]*TEX,s=r[2]*TEX;
+  ctx.fillStyle='#f1ece8';ctx.fillRect(x-2,y-2,s+4,s+4);
+  for(const I of irises){
+    const cx=I.u*TEX,cy=I.v*TEX,ir=I.r*TEX;
+    let g=ctx.createRadialGradient(cx,cy,ir*1.1,cx,cy,ir*3.2);g.addColorStop(0,'rgba(255,255,255,0)');g.addColorStop(1,'rgba(200,130,120,.5)');ctx.fillStyle=g;ctx.fillRect(x,y,s,s);
+    const c=new THREE.Color(color),hx=k=>'#'+c.clone().multiplyScalar(k).getHexString();
+    g=ctx.createRadialGradient(cx,cy,ir*0.25,cx,cy,ir);g.addColorStop(0,hx(1.6));g.addColorStop(0.55,hx(1));g.addColorStop(0.88,hx(0.45));g.addColorStop(1,'#1a120c');ctx.fillStyle=g;ctx.beginPath();ctx.arc(cx,cy,ir,0,7);ctx.fill();
+    ctx.strokeStyle='rgba(0,0,0,.22)';ctx.lineWidth=1;for(let i=0;i<36;i++){const a=i/36*6.283;ctx.beginPath();ctx.moveTo(cx+Math.cos(a)*ir*0.42,cy+Math.sin(a)*ir*0.42);ctx.lineTo(cx+Math.cos(a)*ir*0.95,cy+Math.sin(a)*ir*0.95);ctx.stroke();}
+    ctx.fillStyle='#050505';ctx.beginPath();ctx.arc(cx,cy,ir*0.42,0,7);ctx.fill();
+    ctx.fillStyle='rgba(255,255,255,.85)';ctx.beginPath();ctx.arc(cx-ir*0.3,cy-ir*0.3,ir*0.14,0,7);ctx.fill();
+  }
 }
+// Onde fica a pupila no atlas: UV do vértice mais à frente de cada globo ocular e a escala UV/3D ao redor dele.
+function irisUV(P){
+  const H=HUMAN,out=[];
+  for(const m of [1,2]){
+    const vs=new Map();for(let f=0;f<H.head.nF;f++){if(H.fmat[f]!==m)continue;for(let k=0;k<4;k++)vs.set(H.faces[f][k],[H.uv[f*8+2*k]/65535,H.uv[f*8+2*k+1]/65535]);}
+    let c=V(0,0,0);vs.forEach((_,v)=>c.add(V(P[3*v],P[3*v+1],P[3*v+2])));c.divideScalar(vs.size);
+    let front=-1,fz=-Infinity,R=0;vs.forEach((_,v)=>{const z=P[3*v+2];if(z>fz){fz=z;front=v;}R=Math.max(R,V(P[3*v],P[3*v+1],P[3*v+2]).distanceTo(c));});
+    const fp=V(P[3*front],P[3*front+1],P[3*front+2]),fu=vs.get(front);let sum=0,n=0;
+    vs.forEach((uv,v)=>{if(v===front)return;const d=V(P[3*v],P[3*v+1],P[3*v+2]).distanceTo(fp);if(d<R*0.8&&d>1e-5){sum+=Math.hypot(uv[0]-fu[0],uv[1]-fu[1])/d;n++;}});
+    out.push({u:fu[0],v:fu[1],r:(n?sum/n:0.05/R)*R*0.5});
+  }
+  return out;
+}
+function facePath(ctx,f){const uv=HUMAN.uv;ctx.moveTo(uv[f*8]/65535*TEX,uv[f*8+1]/65535*TEX);for(let k=1;k<4;k++)ctx.lineTo(uv[f*8+k*2]/65535*TEX,uv[f*8+k*2+1]/65535*TEX);ctx.closePath();}
+// Preenche face por face: um caminho único cancelaria faces com UV invertido (regra non-zero) e deixaria buracos.
+function fillFaces(ctx,list,color){
+  ctx.fillStyle=color;ctx.strokeStyle=color;ctx.lineWidth=2.5;ctx.lineJoin='round';
+  for(const f of list){ctx.beginPath();facePath(ctx,f);ctx.fill();ctx.stroke();}
+}
+// Classifica cada face por osso mais próximo (para roupas) usando o rig já ajustado.
+function faceRegions(P,rig,J,height){
+  const H=HUMAN,segs=boneSegments(rig),nm=rig.bones.map(b=>b.name),R={shirt:[],pants:[],shoes:[],scalp:[],sleeve:[]};
+  for(let f=0;f<H.head.nF;f++){
+    if(H.fmat[f]!==0)continue;const q=H.faces[f];let x=0,y=0,z=0;q.forEach(v=>{x+=P[3*v];y+=P[3*v+1];z+=P[3*v+2];});x/=4;y/=4;z/=4;
+    if(H.scalp[f]){R.scalp.push(f);continue;}
+    let best=0,bd=Infinity;const p=[x,y,z];for(const s of segs){const d=pointSegDist2(p,s.a,s.e);if(d<bd){bd=d;best=s.i;}}const n=nm[best];
+    if(n==='Pelvis'||n==='Coxa_E'||n==='Coxa_D'||n==='Canela_E'||n==='Canela_D'){
+      // cintura: acima do umbigo é camisa
+      if(n==='Pelvis'&&y>J.Pelvis.y+(J.Coluna.y-J.Pelvis.y)*0.55)R.shirt.push(f);
+      else if((n==='Canela_E'||n==='Canela_D')&&y<J.Pe_E.y+0.035*height)R.shoes.push(f);else R.pants.push(f);
+    }else if(n==='Pe_E'||n==='Pe_D')R.shoes.push(f);
+    else if(n==='Coluna'||n==='Peito'){if(y<J.Pescoco.y-0.012*height)R.shirt.push(f);}
+    else if(n==='Braco_E'||n==='Braco_D'){const s=n.endsWith('E')?'E':'D',sh=J['Braco_'+s],el=J['Antebraco_'+s];if(V(x,y,z).distanceTo(sh)<sh.distanceTo(el)*0.6)R.sleeve.push(f);}
+  }
+  return R;
+}
+function buildTexture(c,regions,P){
+  const cvs=document.createElement('canvas');cvs.width=cvs.height=TEX;const ctx=cvs.getContext('2d'),male=c.gender>=0.5,suit=c.outfit==='traje';
+  ctx.drawImage(IMG['skin_'+(male?'m':'f')+(suit?'_suit':'')],0,0,TEX,TEX);
+  // Tom de pele: multiplica só os pixels "cor de pele" (preserva traje, cabelo e lábios).
+  const tone=hexRgb(c.skin),ref=[0.87,0.67,0.55],k=tone.map((t,i)=>t/ref[i]),im=ctx.getImageData(0,0,TEX,TEX),d=im.data;
+  if(Math.abs(k[0]-1)+Math.abs(k[1]-1)+Math.abs(k[2]-1)>0.03)for(let i=0;i<d.length;i+=4){const r=d[i],g=d[i+1],b=d[i+2];
+    if(r>90&&r>g&&g>=b*0.95&&(r-b)<r*0.62&&(r-b)>r*0.1){const m=Math.min(1,(r-90)/60);d[i]=Math.min(255,r*(1+(k[0]-1)*m));d[i+1]=Math.min(255,g*(1+(k[1]-1)*m));d[i+2]=Math.min(255,b*(1+(k[2]-1)*m));}}
+  ctx.putImageData(im,0,0);
+  // Cabelo: o couro cabeludo pintado vem da textura do traje (a de pele é careca). Recolore só dentro da máscara do couro cabeludo.
+  if(regions.scalp.length&&c.hair!=='careca'){
+    const m=document.createElement('canvas');m.width=m.height=TEX;const mx=m.getContext('2d');
+    mx.fillStyle='#fff';mx.strokeStyle='#fff';mx.lineWidth=2;for(const f of regions.scalp){mx.beginPath();facePath(mx,f);mx.fill();mx.stroke();}
+    mx.globalCompositeOperation='source-in';mx.drawImage(IMG['skin_'+(male?'m':'f')+'_suit'],0,0,TEX,TEX);mx.globalCompositeOperation='source-over';
+    const hi=mx.getImageData(0,0,TEX,TEX),hd=hi.data,hc=hexRgb(c.hairColor);
+    for(let i=0;i<hd.length;i+=4){if(!hd[i+3])continue;const l=(hd[i]+hd[i+1]+hd[i+2])/765;
+      // pixels escuros = fios (recebem a cor escolhida, mantendo o brilho dos fios); claros = pele na linha do cabelo
+      if(l<0.45){const t=0.4+l*2.4;hd[i]=Math.min(255,hc[0]*255*t);hd[i+1]=Math.min(255,hc[1]*255*t);hd[i+2]=Math.min(255,hc[2]*255*t);}
+      else if(l<0.6){const t=(0.6-l)/0.15,u=0.4+l*2.4;hd[i]=hd[i]*(1-t)+Math.min(255,hc[0]*255*u)*t;hd[i+1]=hd[i+1]*(1-t)+Math.min(255,hc[1]*255*u)*t;hd[i+2]=hd[i+2]*(1-t)+Math.min(255,hc[2]*255*u)*t;hd[i+3]=255*t;}
+      else hd[i+3]=0;}
+    mx.putImageData(hi,0,0);ctx.drawImage(m,0,0);
+  }
+  if(c.outfit==='roupa'){fillFaces(ctx,regions.shirt.concat(regions.sleeve),c.shirt);fillFaces(ctx,regions.pants,c.pants);fillFaces(ctx,regions.shoes,c.shoes);
+    // leve textura de tecido
+    ctx.globalAlpha=0.06;for(let i=0;i<5000;i++){ctx.fillStyle=Math.random()<0.5?'#000':'#fff';ctx.fillRect(Math.random()*TEX,Math.random()*TEX,2,2);}ctx.globalAlpha=1;}
+  drawEyes(ctx,HUMAN.head.eyeRect,c.eyeColor,irisUV(P));
+  return cvs;
+}
+function applyCharTexture(o,cvs){
+  o._uvCanvas=cvs;if(o._uvTexture)o._uvTexture.dispose();o._uvTexture=new THREE.CanvasTexture(cvs);o._uvTexture.flipY=false;o._uvTexture.encoding=THREE.sRGBEncoding;o._uvTexture.anisotropy=4;
+  o.uvData=cvs.toDataURL('image/jpeg',0.9);o.textureData=o.textureData||{};o.textureData.base=o.uvData;o._textureRefs=o._textureRefs||{};o._textureRefs.base=o._uvTexture;
+  o.mat.map=o._uvTexture;o.mat.color.set(0xffffff);o.mat.needsUpdate=true;need=true;
+}
+function buildCharacter(c){
+  const H=HUMAN,M=morph(c),P=M.P,nR=H.head.nR,J=jointPos(P),rig=rigFromJoints(J);
+  const em={pos:Array.from(P.subarray(0,nR*3)),col:new Array(nR*3).fill(1),faces:H.faces.map(f=>f.slice())};
+  return {em,rig,J,P,height:M.height,regions:faceRegions(P,rig,J,M.height)};
+}
+function setupUV(o){o.uvCorners=HUMAN.uvCorners;o.uvTopology=HUMAN.topology;o.uvMode='unwrap';o.uvSeams=[];o.uvSeamsInitialized=true;setGeometryUV(o,'unwrap');}
+function finishChar(o,B,c){
+  o.rig=B.rig;o.rig.weights=autoWeights(o);initRigDeform(o);buildRigViz(o);
+  applyCharTexture(o,buildTexture(c,B.regions,B.P));o._charHeight=B.height;
+  // cabelo 3D opcional: fios só no couro cabeludo
+  if(c.hair==='fios'||c.hair==='longo'){o.ext.fur={...(window.FUR_DEF||{}),...(c.hair==='longo'?{length:0.34,droop:2.2,segments:9,count:9000,width:0.004}:{length:0.05,droop:0.6,segments:3,count:9000,width:0.003}),random:0.3,root:'#'+new THREE.Color(c.hairColor).multiplyScalar(0.6).getHexString(),tip:c.hairColor,region:'scalp',seed:7,kind:'hair'};}
+  else if(o.ext.fur&&o.ext.fur.region==='scalp')delete o.ext.fur;
+  if(window.buildFur)buildFur(o);
+}
+// Triângulos do couro cabeludo (para o gerador de cabelo em effects.js).
+window.charRegionFaces=(o,region)=>(!HUMAN||!o.ext||!o.ext.char||region!=='scalp'||o.em.faces.length!==HUMAN.head.nF)?null:HUMAN.scalpList;
+
+async function createCharacter(params,silent){
+  await loadHuman();
+  const c={...CHAR_DEF,...(params||{})};c.detail={...(c.detail||{})};if(!params||!params.skin)c.skin=SKIN_BY_RACE[c.race]||c.skin;
+  const t0=performance.now(),B=buildCharacter(c);
+  const o=createObject('Personagem '+(S.objs.length+1),B.em,{flat:false});o.ext.char=c;o.params.color='#ffffff';o.params.rough=0.62;applyMaterial(o);setupUV(o);
+  finishChar(o,B,c);
+  if(!silent){selectObj(o);push(()=>removeObj(o,true),()=>{scene.add(o.mesh);S.objs.push(o);selectObj(o);});$('#fFrame').click();
+    toast('Personagem criado: '+B.height.toFixed(2)+' m, '+B.em.pos.length/3+' vértices, rig de 17 ossos ('+Math.round(performance.now()-t0)+' ms)',3200);}
+  return o;
+}
+window.createCharacter=createCharacter;
+async function regenerate(o){
+  await loadHuman();const c=o.ext.char,keys=o.rig?o.rig.poseKeys:{},B=buildCharacter(c);
+  if(o.rigPreviewRoot){o.mesh.remove(o.rigPreviewRoot);o.rigPreviewRoot=null;o.rigPreviewBones=null;}
+  o.em=B.em;o.mask=null;o.rig=null;o.uvCorners=HUMAN.uvCorners;o.uvTopology=HUMAN.topology;o.uvSeamsInitialized=true;o.uvData=null;
+  rebuildGeo(o);setupUV(o);B.rig.poseKeys=keys;finishChar(o,B,c);applyRigFrame(o,S.frame);hud();
+}
+// Só a textura (cores/roupa/olhos) — não mexe na malha, então preserva a escultura.
+async function retexture(o){await loadHuman();const c=o.ext.char,M=morph(c),J=jointPos(M.P),rig=rigFromJoints(J);applyCharTexture(o,buildTexture(c,faceRegions(M.P,rig,J,M.height),M.P));
+  if(o.ext.fur&&o.ext.fur.region==='scalp'){o.ext.fur.tip=c.hairColor;o.ext.fur.root='#'+new THREE.Color(c.hairColor).multiplyScalar(0.6).getHexString();buildFur(o);}}
+// Ao abrir um projeto salvo, recarrega os dados humanos se houver personagem (para ajustar depois).
+on('load',()=>{if(S.objs.some(o=>o.ext&&o.ext.char))loadHuman().catch(()=>{});});
+
+let regenT=0,texT=0;
+function panelChar(P){
+  const busy=h('span',{class:'note'},loading&&!HUMAN?'Carregando corpo humano…':'');
+  P.append(row(lb('Novo'),...Object.keys(PRESETS).map(k=>chip(k,async()=>{try{toast('Montando personagem…',900);await createCharacter(PRESETS[k]);renderPanel();}catch(e){toast('Erro: '+e.message,4000);}})),busy));
+  const o=S.sel,c=o&&o.ext&&o.ext.char;
+  if(!c){P.append(h('div',{class:'note'},'Corpo humano real: a malha e as proporções vêm do MakeHuman (medidas antropométricas de pessoas reais, licença CC0) — rosto, orelhas, mãos com dedos, pés e olhos. Toque num modelo e ajuste gênero, idade, músculos, peso e medidas. Já vem com rig de 17 ossos.'));return;}
+  const re=()=>{clearTimeout(regenT);regenT=setTimeout(()=>regenerate(o).catch(e=>toast('Erro: '+e.message)),220);};
+  const tx=()=>{clearTimeout(texT);texT=setTimeout(()=>retexture(o).catch(e=>toast('Erro: '+e.message)),150);};
+  const sl=(t,k,a,b,st,fmt)=>slider(t,a,b,st,c[k],v=>{c[k]=v;re();},fmt||(v=>(+v).toFixed(2)));
+  const dt=(t,k)=>slider(t,-1,1,0.01,c.detail[k]||0,v=>{c.detail[k]=v;re();},v=>(v>0?'+':'')+(+v).toFixed(2));
+  P.append(h('div',{class:'note'},'Corpo: '+(o._charHeight||0).toFixed(2)+' m. Mudar a forma regenera a malha (perde a escultura); cores e roupas não.'));
+  P.append(sl('Gênero (M ↔ H)','gender',0,1,0.01),sl('Idade (anos)','age',10,90,1,v=>Math.round(v)+''),sl('Músculos','muscle',0,1,0.01),sl('Peso','weight',0,1,0.01),
+    slider('Altura (m)',0,2.3,0.01,c.height,v=>{c.height=v<1?0:v;re();},v=>v<1?'natural':(+v).toFixed(2)));
+  P.append(row(lb('Etnia'),...[['caucasian','Caucasiana'],['asian','Asiática'],['african','Africana'],['mista','Mista']].map(([k,t])=>chip(t,()=>{c.race=k;c.skin=SKIN_BY_RACE[k]||c.skin;re();renderPanel();},c.race===k))));
+  P.append(h('div',{class:'lb'},'Medidas'));
+  P.append(slider('Busto',-1,1,0.01,c.bust||0,v=>{c.bust=v;re();},v=>(+v).toFixed(2)),dt('Peitoral (músculo)','torso-muscle-pectoral'),dt('Costas (dorsais)','torso-muscle-dorsi'),dt('Tronco em V','torso-vshape'),dt('Ombros (largura)','measure-shoulder-dist'),
+    dt('Cintura','measure-waist-circ'),dt('Abdômen definido','stomach-tone'),dt('Barriga','stomach-pregnant'),dt('Quadril','measure-hips-circ'),dt('Glúteos','buttocks-volume'),
+    dt('Braço (grossura)','measure-upperarm-circ'),dt('Braço (comprimento)','measure-upperarm-length'),dt('Antebraço (comprimento)','measure-lowerarm-length'),
+    dt('Coxa (grossura)','measure-thigh-circ'),dt('Panturrilha','measure-calf-circ'),dt('Coxa (comprimento)','measure-upperleg-height'),dt('Canela (comprimento)','measure-lowerleg-height'),
+    dt('Pescoço (grossura)','measure-neck-circ'),dt('Pescoço (altura)','measure-neck-height'),dt('Tronco (altura)','measure-napetowaist-dist'));
+  P.append(h('div',{class:'lb'},'Aparência'));
+  P.append(row(lb('Roupa'),...[['roupa','Camisa e calça'],['traje','Traje'],['pele','Só o corpo']].map(([k,t])=>chip(t,()=>{c.outfit=k;tx();renderPanel();},c.outfit===k))));
+  P.append(row(lb('Cabelo'),...[['curto','Curto'],['fios','Curto + fios 3D'],['longo','Longo (fios 3D)'],['careca','Careca']].map(([k,t])=>chip(t,()=>{c.hair=k;re();renderPanel();},c.hair===k))));
+  P.append(row(lb('Pele'),colorIn(c.skin,v=>{c.skin=v;tx();}),lb('Olhos'),colorIn(c.eyeColor,v=>{c.eyeColor=v;tx();}),lb('Cabelo'),colorIn(c.hairColor,v=>{c.hairColor=v;tx();}),
+    lb('Camisa'),colorIn(c.shirt,v=>{c.shirt=v;tx();}),lb('Calça'),colorIn(c.pants,v=>{c.pants=v;tx();}),lb('Sapato'),colorIn(c.shoes,v=>{c.shoes=v;tx();})));
+  P.append(row(chip('Ir esculpir',()=>setWs('sculpt'),false,'act'),chip('Animar (Rig)',()=>setWs('rig')),chip('Caminhar',()=>{setWs('rig');makeRigPreset('walk');S.playing=true;renderPanel();}),chip('Correr',()=>{setWs('rig');makeRigPreset('run');S.playing=true;renderPanel();}),
+    chip('Congelar (virar malha comum)',()=>{delete o.ext.char;renderPanel();toast('Agora é uma malha comum; o rig e a textura continuam.');})));
+}
+PANELS_EXT.char=panelChar;
+TABS.splice(TABS.findIndex(t=>t[0]==='sculpt'),0,['char','Personagem']);
 
 /* ---------- Surface Nets: campo escalar -> malha de quads ---------- */
 function surfaceNets(field,nx,ny,nz,org,hs){
@@ -116,80 +289,6 @@ function surfaceNets(field,nx,ny,nz,org,hs){
   return {pos,col:new Array(pos.length).fill(1),faces};
 }
 window.surfaceNets=surfaceNets;
-function sampleField(f,min,max,hs){
-  const nx=Math.ceil((max[0]-min[0])/hs)+3,ny=Math.ceil((max[1]-min[1])/hs)+3,nz=Math.ceil((max[2]-min[2])/hs)+3;
-  // grade simétrica em X (escultura com simetria fica perfeita)
-  const org=[-(nx-1)*hs/2,min[1]-hs,min[2]-hs],F=new Float32Array(nx*ny*nz);
-  for(let k=0;k<nz;k++){const z=org[2]+k*hs;for(let j=0;j<ny;j++){const y=org[1]+j*hs;for(let i=0;i<nx;i++)F[i+nx*(j+ny*k)]=f(org[0]+i*hs,y,z);}}
-  return {F,nx,ny,nz,org};
-}
-function eyeball(em,c,r,look){
-  const s=cubeGrid(5,p=>{const l=Math.hypot(p[0],p[1],p[2]);return p.map(x=>x/l*r);}),o=em.pos.length/3;
-  for(let i=0;i<s.pos.length;i+=3){const z=s.pos[i+2]/r;em.pos.push(s.pos[i]+c.x,s.pos[i+1]+c.y,s.pos[i+2]+c.z);const col=z>0.82?[0.02,0.02,0.02]:z>0.62?[0.25,0.45,0.75]:[0.95,0.95,0.95];em.col.push(...col.map(s2l));}
-  s.faces.forEach(f=>em.faces.push(f.map(v=>v+o)));
-}
-function buildCharacter(c){
-  const J=joints(c),H=c.height,hs=H/c.res,sdf=bodySDF(c);
-  const xs=Math.max(Math.abs(J.haE.x),Math.abs(J.haD.x))+0.06*H;
-  const S0=sampleField(sdf,[-xs,0,-0.22*H],[xs,J.headC.y+J.hr*1.6,0.24*H],hs);
-  const em=surfaceNets(S0.F,S0.nx,S0.ny,S0.nz,S0.org,hs);
-  laplacianSmooth(em,1,0.35);
-  // cores por região
-  const rig=characterRig(c),tmp={em,rig};const segs=boneSegments(rig);
-  const skin=hexRgb(c.skin).map(s2l),shirt=hexRgb(c.shirt).map(s2l),pants=hexRgb(c.pants).map(s2l),shoes=hexRgb(c.shoes).map(s2l),hairC=hexRgb(c.hairColor).map(s2l);
-  const nm=rig.bones.map(b=>b.name);em.col=[];
-  for(let v=0;v<em.pos.length/3;v++){
-    const p=[em.pos[3*v],em.pos[3*v+1],em.pos[3*v+2]];let best=0,bd=Infinity;segs.forEach(s=>{const d=pointSegDist2(p,s.a,s.e);if(d<bd){bd=d;best=s.i;}});
-    const n=nm[best];let col=skin;
-    if(c.clothes){
-      if(['Pelvis','Coluna','Peito','Braco_E','Braco_D'].includes(n))col=shirt;
-      if(n==='Pelvis'&&p[1]<J.pelvis.y+0.01*H)col=pants;
-      if(n==='Coxa_E'||n==='Coxa_D'||n==='Canela_E'||n==='Canela_D')col=pants;
-      if(n==='Pe_E'||n==='Pe_D')col=p[1]<J.ankleY+0.04*H?shoes:pants;
-      if((n==='Braco_E'||n==='Braco_D')){const sh=n.endsWith('E')?J.shE:J.shD,el=n.endsWith('E')?J.elE:J.elD;if(V(...p).distanceTo(sh)>sh.distanceTo(el)*0.55)col=skin;}
-    }
-    if(n==='Cabeca'&&c.hair!=='careca'){const hc=J.headC,dy=p[1]-hc.y,dz=p[2]-hc.z;if(dy>-J.hr*0.1&&(dz<J.hr*0.35-dy*0.6||dy>J.hr*0.62))col=hairC;if(c.hair==='longo'&&dz<-J.hr*0.2&&dy>-J.hr*1.6)col=hairC;}
-    em.col.push(...col);
-  }
-  if(c.eyes){const er=J.hr*(c.cartoon?0.26:0.15);[-1,1].forEach(s=>eyeball(em,J.headC.clone().add(V(s*J.hr*0.36,J.hr*0.08,J.hr*0.78)),er));}
-  return em;
-}
-window.buildCharacter=buildCharacter;
-
-function createCharacter(params,silent){
-  const c={...CHAR_DEF,...(params||{})};const t0=performance.now();const em=buildCharacter(c);
-  const o=createObject('Personagem '+(S.objs.length+1),em,{flat:false});o.ext.char=c;o.params.color='#ffffff';o.params.rough=0.65;applyMaterial(o);
-  o.rig=characterRig(c);o.rig.weights=autoWeights(o);initRigDeform(o);buildRigViz(o);
-  if(!silent){selectObj(o);push(()=>removeObj(o,true),()=>{scene.add(o.mesh);S.objs.push(o);selectObj(o);});$('#fFrame').click();
-    toast('Personagem criado: '+em.pos.length/3+' vértices, rig de 17 ossos ('+Math.round(performance.now()-t0)+' ms)',3200);}
-  return o;
-}
-window.createCharacter=createCharacter;
-function regenerate(o){
-  const c=o.ext.char,before={pos:o.em.pos.slice(),col:o.em.col.slice(),faces:o.em.faces.map(f=>f.slice())},rigB=o.rig?JSON.stringify({bones:o.rig.bones,poseKeys:o.rig.poseKeys}):null;
-  const keys=o.rig?o.rig.poseKeys:{};const em=buildCharacter(c);
-  if(o.rigPreviewRoot){o.mesh.remove(o.rigPreviewRoot);o.rigPreviewRoot=null;o.rigPreviewBones=null;}
-  o.em=em;o.mask=null;o.uvCorners=null;o.uvSeamsInitialized=false;o.uvSeams=[];o.rig=characterRig(c);o.rig.poseKeys=keys;o.rig.weights=null;rebuildGeo(o);
-  o.rig.weights=autoWeights(o);initRigDeform(o);buildRigViz(o);applyRigFrame(o,S.frame);
-}
-let regenT=0;
-function panelChar(P){
-  P.append(row(lb('Novo'),...Object.keys(PRESETS).map(k=>chip(k,()=>{createCharacter(PRESETS[k]);renderPanel();}))));
-  const o=S.sel,c=o&&o.ext&&o.ext.char;
-  if(!c){P.append(h('div',{class:'note'},'Toque num modelo acima para criar um personagem humanoide completo (corpo, rosto, olhos, roupas e rig de 17 ossos com pesos). Depois ajuste as proporções aqui, esculpa na aba Esculpir e anime na aba Rig.'));return;}
-  const re=()=>{clearTimeout(regenT);regenT=setTimeout(()=>{regenerate(o);hud();},260);};
-  const sl=(t,k,a,b,st)=>slider(t,a,b,st,c[k],v=>{c[k]=v;re();},v=>(+v).toFixed(2));
-  P.append(h('div',{class:'note'},'Ajustes regeneram a malha (perde a escultura feita depois). Termine as proporções antes de esculpir.'));
-  P.append(sl('Altura (m)','height',0.6,2.4,0.01),sl('Peso / massa','build',0,1,0.01),sl('Músculos','muscle',0,1,0.01),sl('Ombros','shoulders',0.7,1.4,0.01),sl('Quadril','hips',0.7,1.4,0.01),
-    sl('Peito','chest',0.8,1.3,0.01),sl('Busto','bust',0,1.2,0.01),sl('Barriga','belly',0,1.5,0.01),sl('Cabeça','head',0.7,2.2,0.01),sl('Pescoço','neck',0.4,1.8,0.01),sl('Braços','arms',0.7,1.3,0.01),sl('Pernas','legs',0.6,1.3,0.01));
-  P.append(row(lb('Cabelo'),...['careca','curto','volumoso','longo'].map(k=>chip(k,()=>{c.hair=k;re();renderPanel();},c.hair===k)),chip('Olhos',()=>{c.eyes=!c.eyes;re();renderPanel();},c.eyes,'cy'),chip('Roupas',()=>{c.clothes=!c.clothes;re();renderPanel();},c.clothes,'cy'),chip('Estilo cartoon',()=>{c.cartoon=c.cartoon?0:1;re();renderPanel();},!!c.cartoon,'cy')));
-  P.append(row(lb('Pele'),colorIn(c.skin,v=>{c.skin=v;re();}),lb('Camisa'),colorIn(c.shirt,v=>{c.shirt=v;re();}),lb('Calça'),colorIn(c.pants,v=>{c.pants=v;re();}),lb('Sapato'),colorIn(c.shoes,v=>{c.shoes=v;re();}),lb('Cabelo'),colorIn(c.hairColor,v=>{c.hairColor=v;re();})));
-  P.append(slider('Detalhe (voxels)',40,140,1,c.res,v=>{c.res=v;re();},v=>v+''));
-  P.append(row(chip('Ir esculpir',()=>setWs('sculpt'),false,'act'),chip('Animar (Rig)',()=>setWs('rig')),chip('Caminhar',()=>{setWs('rig');makeRigPreset('walk');S.playing=true;renderPanel();}),chip('Congelar (virar malha comum)',()=>{delete o.ext.char;renderPanel();toast('Agora é uma malha comum; o rig continua.');})));
-}
-PANELS_EXT.char=panelChar;
-TABS.splice(TABS.findIndex(t=>t[0]==='sculpt'),0,['char','Personagem']);
-
 /* ---------- Remesh por voxel (malha fechada qualquer) ---------- */
 function voxelRemesh(o,res){
   const em=o.em,P=em.pos;const b=new THREE.Box3().setFromBufferAttribute(new THREE.Float32BufferAttribute(P,3)),size=b.getSize(V(0,0,0)),hs=Math.max(size.x,size.y,size.z)/res;

@@ -98,7 +98,7 @@ function makeMcp() {
 function notifyToolsChanged() { for (const m of mcpServers) m.server.sendToolListChanged().catch(() => {}); }
 
 /* ---------- HTTP: app estático + /mcp + /bridge ---------- */
-const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.svg': 'image/svg+xml', '.png': 'image/png', '.css': 'text/css', '.md': 'text/plain; charset=utf-8' };
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.svg': 'image/svg+xml', '.png': 'image/png', '.css': 'text/css', '.md': 'text/plain; charset=utf-8', '.jpg': 'image/jpeg', '.gz': 'application/octet-stream' };
 function tokenOk(req, url) { return url.searchParams.get('token') === TOKEN || url.searchParams.get('t') === TOKEN || req.headers.authorization === 'Bearer ' + TOKEN; }
 async function readBody(req) { const chunks = []; for await (const c of req) chunks.push(c); const s = Buffer.concat(chunks).toString('utf8'); return s ? JSON.parse(s) : undefined; }
 

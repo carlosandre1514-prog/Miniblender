@@ -1,7 +1,7 @@
 /* Service worker: guarda o app no aparelho para abrir sem internet. */
-const CACHE='miniblender-v2';
+const CACHE='miniblender-v3';
 const FILES=['./','index.html','manifest.webmanifest','icon.svg','vendor/three.min.js','vendor/GLTFExporter.js','vendor/GLTFLoader.js','vendor/OBJLoader.js','vendor/anthropic-sdk.mjs',
-  'js/tools.js','js/modifiers.js','js/scene.js','js/effects.js','js/character.js','js/api.js','js/claude.js','plugins/exemplo-escada.js'];
+  'js/tools.js','js/modifiers.js','js/scene.js','js/effects.js','js/character.js','js/api.js','js/claude.js','plugins/exemplo-escada.js','assets/human.bin.gz','assets/skin_f.jpg','assets/skin_m.jpg','assets/skin_f_suit.jpg','assets/skin_m_suit.jpg'];
 self.addEventListener('install',e=>{e.waitUntil(caches.open(CACHE).then(c=>c.addAll(FILES)).then(()=>self.skipWaiting()));});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()));});
 // Rede primeiro (pega atualizações), cache se estiver offline. Nunca intercepta a API da Anthropic nem o servidor MCP.

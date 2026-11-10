@@ -10,11 +10,11 @@ Abra `index.html` por um servidor (veja [Rodar](#rodar)) e toque nas abas de bai
 | **Cena** | Luzes (ponto, spot, sol), câmeras com keyframes, céu em gradiente, neblina, proporção do render (16:9, 9:16, 1:1…) |
 | **Editar** | Vértice/aresta/face, mover/**girar**/escalar, **edição proporcional**, extrudar, inset, loop cut, bevel, subdividir, **mesclar por distância**, **preencher (F)**, **tris→quads**, triangular, inverter/recalcular normais, selecionar ligados, separar |
 | **Modific.** | Pilha **não-destrutiva**: Mirror, Subdivision Surface, Array, Solidify, Smooth, Displace, Weld, Wireframe, Screw/Torno, Triangulate. Aplicar todos ou um só |
-| **Personagem** | **Criador de humanoide**: 7 modelos (Adulto, Mulher, Homem forte, Criança, Cartoon…), sliders de altura, massa, músculos, ombros, quadril, busto, barriga, cabeça, braços e pernas; cabelo, olhos, roupas e cores. Já vem com **rig de 17 ossos e pesos** |
+| **Personagem** | **Corpo humano real**: malha do MakeHuman (medidas antropométricas de pessoas reais) com rosto, orelhas, mãos com dedos, pés e olhos. 11 modelos (Homem, Mulher, Atleta, Fisiculturista, Idoso/a, Menino/a…). Sliders de gênero, idade (10–90), músculos, peso, altura, etnia e 20 medidas (busto, cintura, quadril, ombros, braços, pernas, pescoço…). Textura de pele real com tom ajustável, roupa, cor dos olhos, cabelo pintado ou em fios 3D. **Rig de 17 ossos** ajustado às juntas do corpo |
 | **Esculpir** | Draw, Clay, Layer, Smooth, Flatten, Crease, Grab, Inflate, Pinch, Snake Hook, **Máscara**; simetria; **pressão da caneta** (força ou raio); **Remesh por voxel** |
 | **Material** | PBR, pintura por vértice, editor UV com costuras, mapas Base/Normal/Roughness/Metallic/AO |
 | **Nós** | Principled BSDF + **Noise, Voronoi, Xadrez, Tijolos, Gradiente, Color Ramp**, Inverter, Matemática (×, +, −, ÷, ^, mín, máx, onda). As texturas procedurais são calculadas em 3D e gravadas numa textura (sem costura) |
-| **Efeitos** | **Partículas**: fogo, fumaça, faíscas, neve, chuva, magia, explosão, fonte de água, poeira (todas editáveis). **Pelo/cabelo/grama**. **Física de corpo rígido** (cair, quicar, colidir) e **estilhaçar + explodir**, tudo gravado em keyframes |
+| **Efeitos** | **Natureza**: fogo (línguas de chama + brasas + fumaça + luz tremulando), explosão, fumaça, faíscas, **raio** ramificado com clarão, **chuva** com respingos, neve, fonte de água, **água (lago/mar)** com ondas e reflexo do sol, **gramado** com vento. **Energia (estilo skin de jogo)**: "Skin de energia" (veias pulsando na peça, núcleo com anéis, cristais orbitando, raios na superfície, partículas e sequência de ativação) e "Tiro de energia". Pelo/cabelo, **física de corpo rígido** e **estilhaçar + explodir** |
 | **Animar** | Timeline, keyframes, FPS, **gravar vídeo WebM** |
 | **Rig / Ossos** | Ossos, pintura de pesos com **mapa de calor**, espelhar pesos/pose E→D, IK de 2 ossos, caminhar/correr/saltar prontos |
 | **Render** | Render com bloom, vinheta, aberração, saturação e contraste |
@@ -23,6 +23,12 @@ Abra `index.html` por um servidor (veja [Rodar](#rodar)) e toque nas abas de bai
 Menu ☰: projetos salvos no aparelho, importar GLB/glTF/OBJ e exportar GLB (com animação e modificadores), OBJ e JSON.
 
 ## O que mudou nesta versão
+
+### Personagens e efeitos realistas
+- **Personagem**: saiu o boneco de cápsulas; entrou a malha humana do MakeHuman (13,5 mil vértices) com os morphs originais. Os fios de cabelo seguem a cabeça na animação. Subdividir o personagem preserva a textura de pele.
+- **Caminhar / correr / saltar** refeitos: os braços descem ao lado do corpo e balançam opostos às pernas, cotovelos e joelhos dobram no eixo certo.
+- **Partículas** agora são quads instanciados com shader próprio por tipo (antes eram pontos redondos): alinham e esticam com a velocidade.
+- **Efeitos novos**: raio, superfície de água, gramado com vento, skin de energia e tiro de energia.
 
 ### Correções
 - **Salvamento**: o projeto agora é salvo no **IndexedDB**. Antes era o `localStorage` (limite de ~5 MB), que falhava com texturas. Há salvamento automático a cada 30 s e ao sair do app, além de vários projetos com nome ("Salvar como…"). Projetos antigos são migrados sozinhos.
@@ -79,7 +85,7 @@ Quando o Claude Desktop/Code inicia o servidor, peça ao Claude: *"use miniblend
 
 **Segurança:** o token é gerado uma vez e fica em `~/.miniblender-mcp.json`. Ele é exigido no `/mcp` e na ponte `/bridge`. Opções: `--port 8765`, `--token SEGREDO`, `--no-stdio`.
 
-**Ferramentas disponíveis (30):** `get_scene`, `view_scene` (foto da cena), `add_primitive`, `create_character`, `select_object`, `transform_object`, `delete_object`, `duplicate_object`, `rename_object`, `set_material`, `set_procedural_texture`, `add_modifier`, `apply_modifiers`, `edit_mesh`, `sculpt_stroke`, `paint_vertices`, `add_light`, `set_world`, `set_view`, `add_camera`, `add_particles`, `add_fur`, `physics`, `rig`, `set_pose`, `animate`, `render` (imagem final), `project` (salvar/exportar/desfazer), `run_script` (desligado por padrão) e `miniblender_status`. As definições ficam em `js/tools.js` e servem tanto ao app quanto ao servidor.
+**Ferramentas disponíveis (31):** `get_scene`, `view_scene` (foto da cena), `add_primitive`, `create_character`, `select_object`, `transform_object`, `delete_object`, `duplicate_object`, `rename_object`, `set_material`, `set_procedural_texture`, `add_modifier`, `apply_modifiers`, `edit_mesh`, `sculpt_stroke`, `paint_vertices`, `add_light`, `set_world`, `set_view`, `add_camera`, `add_particles` (fogo, raio, chuva, água, skin de energia, tiro…), `add_lawn`, `add_fur`, `physics`, `rig`, `set_pose`, `animate`, `render` (imagem final), `project` (salvar/exportar/desfazer), `run_script` (desligado por padrão) e `miniblender_status`. As definições ficam em `js/tools.js` e servem tanto ao app quanto ao servidor.
 
 ## Plugins
 
@@ -113,8 +119,10 @@ index.html            app principal (geometria, edição, escultura, material, U
 js/tools.js           definições das ferramentas (app + MCP)
 js/modifiers.js       pilha de modificadores
 js/scene.js           luzes, câmeras, mundo
-js/effects.js         partículas, pelo, física, estilhaçar
-js/character.js       criador de humanoide (SDF + Surface Nets) e remesh por voxel
+js/effects.js         partículas com shaders, raio, água, gramado, skin de energia, pelo, física
+js/character.js       personagem humano (malha MakeHuman + morphs + textura + rig) e remesh por voxel
+assets/               human.bin.gz (malha, UVs, morphs, juntas) e texturas de pele
+tools/build_human.py  gera os assets a partir dos dados do MakeHuman
 js/api.js             API pública, plugins, ponte MCP
 js/claude.js          aba Claude (assistente, conector, plugins)
 vendor/               Three.js r128 e SDK da Anthropic (offline)
@@ -124,3 +132,9 @@ sw.js, manifest       PWA (instalar e usar offline)
 ```
 
 Teste ponta a ponta: com o servidor rodando (`node server.js --no-stdio --token testtoken`), rode `node e2e-test.mjs` em `mcp-server/`. Ele precisa do Playwright. O teste abre o app, chama todas as ferramentas pelo MCP e confere o salvamento.
+
+## Créditos e licenças
+
+- **Corpo humano**: malha base, morphs e texturas de pele do [MakeHuman](http://www.makehumancommunity.org) (MakeHuman Team), cujos assets são distribuídos sob **CC0**. O app usa só os dados (via `tools/build_human.py`), nenhum código do MakeHuman.
+- **Three.js** r128 (MIT) e **@anthropic-ai/sdk** (MIT), em `vendor/`.
+

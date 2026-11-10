@@ -36,7 +36,7 @@ function vertexNormals(em){
   for(let i=0;i<n;i++){const l=Math.hypot(N[3*i],N[3*i+1],N[3*i+2])||1;N[3*i]/=l;N[3*i+1]/=l;N[3*i+2]/=l;}return N;
 }
 function bbox(em){const a=[Infinity,Infinity,Infinity],b=[-Infinity,-Infinity,-Infinity];for(let i=0;i<em.pos.length;i+=3)for(let c=0;c<3;c++){a[c]=Math.min(a[c],em.pos[i+c]);b[c]=Math.max(b[c],em.pos[i+c]);}return {min:a,max:b,size:b.map((v,i)=>Math.max(1e-6,v-a[i]))};}
-const AXI={x:0,y:1,z:2};
+const AXI={x:0,y:1,z:2},KEEP_UV=new Set(['subsurf','smooth','displace']);
 
 const OPS={
   mirror(em,m){
@@ -48,7 +48,7 @@ const OPS={
     // Remove faces duplicadas que ficam exatamente no plano de espelho.
     const seen=new Set();em.faces=em.faces.filter(f=>{const key=f.slice().sort((a,b)=>a-b).join(',');if(seen.has(key))return false;seen.add(key);return true;});
   },
-  subsurf(em,m){for(let l=0;l<clamp(m.levels|0,0,4);l++){if(em.faces.length*4>200000)break;const r=catmull(em);em.pos=r.pos;em.col=r.col;em.faces=r.faces;}},
+  subsurf(em,m){for(let l=0;l<clamp(m.levels|0,0,4);l++){if(em.faces.length*4>200000)break;const r=catmull(em);em.pos=r.pos;em.col=r.col;em.faces=r.faces;if(em.uvf)em.uvf=catmullFaceUVs(em.uvf);}},
   array(em,m){
     const b=bbox(em),off=m.relative?[m.ox*b.size[0],m.oy*b.size[1],m.oz*b.size[2]]:[m.ox,m.oy,m.oz],n=em.pos.length/3,F=em.faces.slice(),base=em.pos.slice(),bc=em.col.slice();
     for(let c=1;c<clamp(m.count|0,1,64);c++){const o0=em.pos.length/3;for(let i=0;i<n;i++){em.pos.push(base[3*i]+off[0]*c,base[3*i+1]+off[1]*c,base[3*i+2]+off[2]*c);em.col.push(bc[3*i],bc[3*i+1],bc[3*i+2]);}F.forEach(f=>em.faces.push(f.map(v=>v+o0)));}
@@ -92,11 +92,13 @@ const OPS={
 
 function evalMods(o){
   const em=copyEm(o.em);em.pos=livePositions(o);
+  // UVs por canto de face acompanham os modificadores que sabem levá-los (Subdivision, Smooth, Displace).
+  em.uvf=o.mat.map&&o.uvTopology===o.em.faces.map(f=>f.join(',')).join(';')?faceCornerUVs(o.em.faces,o.uvCorners):null;
   o._modWarn=null;
   for(const m of mods(o)){if(m.on===false)continue;const f=OPS[m.type];
     // Proteção para celular: não passa de ~250 mil faces (evita travar o app).
     if(em.faces.length>250000){o._modWarn='Resultado grande demais: modificadores a partir de “'+(MOD_TYPES[m.type]||{}).title+'” foram pulados.';break;}
-    if(f){try{f(em,m);}catch(err){console.warn('mod',m.type,err);}}}
+    if(f){try{f(em,m);if(!KEEP_UV.has(m.type))em.uvf=null;}catch(err){console.warn('mod',m.type,err);}}}
   if(o._modWarn)toast(o._modWarn,3000);
   return em;
 }
@@ -113,7 +115,8 @@ function updateMods(o){
   const em=evalMods(o),g=buildGeo(em);
   // Com textura (procedural/imagem) a malha avaliada ganha atlas UV próprio; sem textura, projeção em caixa (rápida).
   const textured=(o.graph&&o.graph.links.length)||(o.textureData&&o.textureData.base);
-  if(textured&&em.faces.length<60000){const fake={em,uvSeams:[],uvSeamsInitialized:false,mesh:{geometry:g}};uvUnwrap(fake);o._modEm=em;o._modCorners=fake.uvCorners;}
+  if(em.uvf){const uc=cornersFromFaceUVs(em.uvf),uv=new Float32Array(uc.length*2);uc.forEach((q,i)=>{uv[2*i]=q[0];uv[2*i+1]=q[1];});g.setAttribute('uv',new THREE.BufferAttribute(uv,2));g.setAttribute('uv2',new THREE.BufferAttribute(uv.slice(),2));o._modEm=em;o._modCorners=uc;}
+  else if(textured&&em.faces.length<60000){const fake={em,uvSeams:[],uvSeamsInitialized:false,mesh:{geometry:g}};uvUnwrap(fake);o._modEm=em;o._modCorners=fake.uvCorners;}
   else{boxUV(g);o._modEm=null;o._modCorners=null;}
   if(!o.modMesh){o.modMesh=new THREE.Mesh(g,o.mat);o.modMesh.castShadow=o.modMesh.receiveShadow=true;o.modMesh.raycast=()=>{};o.modMesh.name=o.mesh.name+'_mod';o.mesh.add(o.modMesh);}
   else{o.modMesh.geometry.dispose();o.modMesh.geometry=g;}

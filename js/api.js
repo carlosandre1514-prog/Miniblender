@@ -64,7 +64,8 @@ const H={
     if(a.position||a.rotation_deg||a.scale){if(a.position)o.mesh.position.fromArray(a.position);if(a.rotation_deg)o.mesh.rotation.set(...a.rotation_deg.map(rad));if(a.scale)o.mesh.scale.fromArray(a.scale);}
     hud();renderPanel();need=true;return text({created:describe(o)});
   },
-  create_character(a){const p={...(a.preset&&window.CHAR_PRESETS?CHAR_PRESETS[a.preset]:{}),...(a.params||{})};const o=createCharacter(p);if(a.position)o.mesh.position.fromArray(a.position);renderPanel();return text({created:describe(o),tip:'Use set_pose/animate para animar; sculpt_stroke para esculpir.'});},
+  async create_character(a){const p={...(a.preset&&window.CHAR_PRESETS?CHAR_PRESETS[a.preset]:{}),...(a.params||{})};if(a.params&&a.params.detail)p.detail={...((CHAR_PRESETS[a.preset]||{}).detail||{}),...a.params.detail};
+    const o=await createCharacter(p);if(a.position)o.mesh.position.fromArray(a.position);renderPanel();return text({created:describe(o),height_m:+(o._charHeight||0).toFixed(2),tip:'Use set_pose/animate para animar; sculpt_stroke para esculpir.'});},
   select_object(a){const o=getObj(a);selectObj(o);return text('Selecionado: '+o.name+' (id '+o.id+')');},
   transform_object(a){const o=getObj(a);setTRS(o,a);return text(describe(o));},
   delete_object(a){const o=getObj(a);removeObj(o);push(()=>{scene.add(o.mesh);S.objs.push(o);selectObj(o);},()=>removeObj(o,true));return text('Apagado: '+o.name);},
@@ -117,7 +118,9 @@ const H={
     if(a.fov){cam.fov=a.fov;cam.updateProjectionMatrix();}applyCam();return text({target:r3(orb.t.toArray()),distance:orb.d});},
   add_camera(){const C=addSceneCamera();renderPanel();return text('Câmera “'+C.name+'” criada a partir da vista atual e ativada.');},
   add_particles(a){if(!FX_PRESETS[a.preset])throw new Error('preset inválido');const em=a.emitter_id!=null?getObj({id:a.emitter_id}).id:null;
-    const s=makeFX(a.preset,em);if(a.offset)s.offset=a.offset;Object.assign(s,a.params||{});fxRebuildMat(s);renderPanel();return text({system:s.name,emitter:s.emitter,tip:'As partículas animam na timeline (animate play) e aparecem em render/view_scene.'});},
+    const s=makeFX(a.preset,em),grp=FX.systems.filter(x=>x.group===s.group);if(a.offset)grp.forEach(x=>x.offset=a.offset.slice());Object.assign(s,a.params||{});grp.forEach(x=>fxRebuildMat(x));applyFrame(S.frame);renderPanel();
+    return text({effect:s.name,layers:grp.map(x=>x.name),emitter:s.emitter,tip:'O efeito anima na timeline: use animate set_frame (ex.: 30) antes de view_scene/render para vê-lo formado.'});},
+  add_lawn(a){const o=makeLawn(a.size||5);if(a.position)o.mesh.position.fromArray(a.position);if(a.count){o.ext.fur.count=a.count;buildFur(o);}renderPanel();return text({created:describe(o)});},
   add_fur(a){const o=getObj(a);const F=o.ext.fur={...FUR_DEF,...(FUR_STYLES[a.style||'pelo']||{}),seed:Math.floor(Math.random()*1e6)};
     if(a.count)F.count=a.count;if(a.length)F.length=a.length;if(a.root)F.root=a.root;if(a.tip)F.tip=a.tip;buildFur(o);renderPanel();return text({fur:F});},
   physics(a){let list=(a.ids||[]).map(id=>getObj({id}));if(!list.length)list=S.sel?[S.sel]:S.objs.slice();
