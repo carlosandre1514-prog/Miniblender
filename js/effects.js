@@ -31,7 +31,7 @@ const PRESETS={
     {name:'Névoa da água',kind:'glow',rate:45,life:1.4,speed:2.2,dir:UP,spread:0.3,gravity:3,drag:1.2,size:0.3,sizeEnd:0.6,c0:'#dff2ff',c1:'#dff2ff',a0:0.1,a1:0,turb:0.4,add:false,shape:'point'}]},
   magic:{name:'Magia',layers:[{name:'Magia',kind:'star',rate:90,life:2,speed:0.5,dir:UP,spread:1,gravity:-0.4,drag:0.3,size:0.11,sizeEnd:0,c0:'#7df9ff',c1:'#b04dff',a0:1,a1:0,turb:1.2,add:true,shape:'surface',swirl:1.5,light:{color:'#7fd0ff',intensity:2.5,dist:5,flicker:0.2,up:0.3}}]},
   explosion:{name:'Explosão',layers:[
-    {name:'Explosão',kind:'flame',rate:0,burst:150,life:0.75,speed:3.2,dir:UP,spread:1,gravity:-0.8,drag:3.2,size:1.0,sizeEnd:1.7,tall:1.0,c0:'#ffd78a',c1:'#ff3d00',a0:1,a1:0,turb:0.6,add:true,shape:'point',light:{color:'#ffb060',intensity:40,dist:18,flicker:0.1,up:0.4,decay:5}},
+    {name:'Explosão',kind:'fireball',rate:0,burst:110,life:0.8,speed:3.4,dir:UP,spread:1,gravity:-0.8,drag:3.2,size:0.9,sizeEnd:1.9,spin:0.8,c0:'#ffd78a',c1:'#ff3d00',a0:1,a1:0,turb:0.6,add:true,shape:'point',light:{color:'#ffb060',intensity:40,dist:18,flicker:0.1,up:0.4,decay:5}},
     {name:'Estilhaços',kind:'spark',rate:0,burst:320,life:1.6,speed:9,dir:UP,spread:1,gravity:8,drag:0.6,size:0.016,sizeEnd:0.004,stretch:0.03,c0:'#fff0c0',c1:'#ff5a00',a0:1,a1:0,turb:0,add:true,shape:'point',ground:'bounce'},
     {name:'Fumaça da explosão',kind:'smoke',rate:0,burst:70,life:3.4,speed:2.6,dir:UP,spread:1,gravity:-0.5,drag:2.2,size:0.7,sizeEnd:2.8,c0:'#3a3430',c1:'#151515',a0:0.6,a1:0,turb:0.5,add:false,shape:'point',spin:0.5}]},
   dust:{name:'Poeira / pó',layers:[{name:'Poeira',kind:'glow',rate:60,life:4,speed:0.05,dir:UP,spread:1,gravity:-0.02,drag:0.5,size:0.03,sizeEnd:0.03,c0:'#fff6d6',c1:'#ffdca8',a0:0.7,a1:0,turb:0.25,add:true,shape:'box',areaSize:6}]},
@@ -47,8 +47,8 @@ const PRESETS={
   ocean:{name:'Água (lago/mar)',layers:[{name:'Água',kind:'ocean',size:14,waveH:0.09,waveLen:2.2,speed:1,chop:0.7,deep:'#0b3a55',shallow:'#2a8fa8',foam:0.5,y:0.05}]}
 };
 window.FX_PRESETS=PRESETS;
-const KIND_ID={glow:0,flame:1,smoke:2,spark:3,rain:4,drop:5,ring:6,snow:7,star:8,core:9};
-const ALIGN={spark:1,rain:1,drop:1,flame:1};
+const KIND_ID={glow:0,flame:1,smoke:2,spark:3,rain:4,drop:5,ring:6,snow:7,star:8,core:9,muzzle:10,fireball:11};
+const ALIGN={spark:1,rain:1,drop:1,flame:1,muzzle:1};
 
 /* ---------- textura de ruído periódica (ladrilhável) ---------- */
 let NOISE=null;
@@ -130,6 +130,22 @@ void main(){
   float swirl=nz(vec2(ang*2.+d*1.4-t*0.3,d*1.2+t*0.1))*exp(-d*3.)*1.3;
   a=clamp(c0+rays+ring1+ring2+ring3+swirl,0.,4.)*(1.-smoothstep(0.9,1.,d));
   col=mix(uC0,vec3(1.),clamp(c0*0.5+rays*0.15,0.,1.))*1.9;
+#elif KIND==10
+  // clarão de boca de cano: jato para a frente (y = direção do tiro), lóbulos laterais do quebra-chamas e miolo branco
+  float ts=vSeed*31.;
+  float wid=0.1+0.75*vUv.y*(1.-vUv.y)*1.7;
+  float jet=(1.-smoothstep(0.,wid,abs(p.x)))*smoothstep(0.,0.05,vUv.y)*(1.-smoothstep(0.5,1.,vUv.y+(nz(vec2(p.x*0.6+ts,vUv.y*0.5+ts))-0.5)*0.55));
+  float side=exp(-pow((vUv.y-0.13)*8.,2.))*(1.-smoothstep(0.1,0.95,abs(p.x)))*(0.45+nz(vec2(p.x*1.4+ts,0.3)));
+  float hot=exp(-(p.x*p.x*26.+pow((vUv.y-0.1)*5.5,2.)));
+  float hh=jet*(0.55+0.9*nz(vec2(p.x+ts,vUv.y*1.5-ts)))+side*0.9+hot*1.6;
+  col=mix(uC1,uC0,smoothstep(0.15,0.6,hh));col=mix(col,vec3(1.,0.97,0.86),smoothstep(0.75,1.35,hh));col*=2.4;a=clamp(hh,0.,1.);
+#elif KIND==11
+  // bola de fogo: nuvem com borda erodida por ruído; esfria de branco para laranja, vermelho e some
+  float nf=nz(vUv*0.6+vSeed*3.+vec2(0.,-uTime*0.05))*0.6+nz(vUv*1.6+vSeed*7.)*0.4;
+  float eg=mix(0.18,0.7,vAge);
+  float mk=smoothstep(1.,0.15,d+(nf-0.5)*0.9)*smoothstep(eg-0.2,eg+0.2,nf+(1.-d)*0.5);
+  float ht=mk*pow(1.-vAge,0.8)*(0.55+0.9*nf);
+  col=mix(uC1*0.5,uC1,smoothstep(0.05,0.3,ht));col=mix(col,uC0,smoothstep(0.25,0.6,ht));col=mix(col,vec3(1.,0.96,0.82),smoothstep(0.65,1.,ht));col*=1.7;a=clamp(ht*1.6,0.,1.);
 #endif
   gl_FragColor=vec4(col,a*vAlpha);if(gl_FragColor.a<0.003)discard;
   #include <tonemapping_fragment>
@@ -145,7 +161,7 @@ function quadGeo(max){
 function partMat(kind,sys){
   return new THREE.ShaderMaterial({vertexShader:P_VS,fragmentShader:P_FS,defines:{KIND:KIND_ID[kind]||0},transparent:true,depthWrite:false,side:THREE.DoubleSide,
     blending:sys.add?THREE.AdditiveBlending:THREE.NormalBlending,
-    uniforms:{uNoise:{value:noiseTex()},uTime:TIME,uC0:{value:new THREE.Color()},uC1:{value:new THREE.Color()},uAlign:{value:ALIGN[kind]?1:0},uStretch:{value:sys.stretch||0},uTall:{value:sys.tall||1},uSpin:{value:sys.spin||0},uGround:{value:kind==='ring'?1:0},uAnchor:{value:kind==='flame'?0.42:0}}});
+    uniforms:{uNoise:{value:noiseTex()},uTime:TIME,uC0:{value:new THREE.Color()},uC1:{value:new THREE.Color()},uAlign:{value:ALIGN[kind]?1:0},uStretch:{value:sys.stretch||0},uTall:{value:sys.tall||1},uSpin:{value:sys.spin||0},uGround:{value:kind==='ring'?1:0},uAnchor:{value:kind==='flame'?0.42:kind==='muzzle'?0.5:0}}});
 }
 function mkMesh(kind,sys,max){const m=new THREE.Mesh(quadGeo(max),partMat(kind,sys));m.frustumCulled=false;m.renderOrder=kind==='smoke'?4:6;m.raycast=()=>{};scene.add(m);return m;}
 
@@ -158,7 +174,8 @@ function build(sys){
 }
 function destroy(sys){
   if(sys.kind==='veins')clearVeins(sys);
-  ['_mesh','_ring','_light','_flash','_flashQ'].forEach(k=>{const m=sys[k];if(!m)return;scene.remove(m);if(m.geometry)m.geometry.dispose();if(m.material)m.material.dispose();sys[k]=null;});
+  if(window.FXK&&FXK.DESTROY[sys.kind])FXK.DESTROY[sys.kind](sys);
+  ['_mesh','_ring','_light','_flash','_flashQ','_m2','_m3','_m4','_m5'].forEach(k=>{const m=sys[k];if(!m)return;scene.remove(m);if(m.geometry)m.geometry.dispose();if(m.material)m.material.dispose();sys[k]=null;});
 }
 function rebuildMat(sys){if(EVAL[sys.kind]){if(sys.kind==='ocean')oceanUniforms(sys);if(sys.kind==='shards'&&sys._mesh&&sys._mesh.count!==sys.count){destroy(sys);build(sys);}return;}const m=sys._mesh.material;m.blending=sys.add?THREE.AdditiveBlending:THREE.NormalBlending;m.uniforms.uStretch.value=sys.stretch||0;m.uniforms.uTall.value=sys.tall||1;m.uniforms.uSpin.value=sys.spin||0;m.needsUpdate=true;}
 function makeSystem(preset,emitterId){
@@ -384,7 +401,7 @@ function buildCore(sys){sys._mesh=mkMesh('core',{add:true},1);sys._mesh.renderOr
 function evalCore(sys,f){
   const L=level(sys,f),B=emitterBox(sys),g=sys._mesh.geometry,u=sys._mesh.material.uniforms;u.uC0.value.set(sys.c0).convertSRGBToLinear();u.uC1.value.copy(u.uC0.value);
   // fica um pouco à frente do centro, na direção da câmera, para não sumir dentro do objeto
-  const p=B.c.clone().add(viewCam().position.clone().sub(B.c).normalize().multiplyScalar(B.o?Math.min(B.r,B.h)*0.9:0));
+  const p=B.c.clone().add(viewCam().position.clone().sub(B.c).normalize().multiplyScalar(B.o&&!sys.inside?Math.min(B.r,B.h)*0.9:0));
   g.attributes.iPos.array.set([p.x,p.y,p.z]);g.attributes.iVel.array.set([0,0,0]);g.attributes.iData.array.set([sys.size*(0.35+0.65*L.act)*(1+0.04*Math.sin(TIME.value*5)),0,(sys.seed%100)/100,Math.min(1,L.lvl*1.2)]);
   g.instanceCount=1;g.attributes.iPos.needsUpdate=g.attributes.iData.needsUpdate=true;
   if(sys._light){sys._light.position.copy(p);sys._light.color.set(sys.light.color);sys._light.intensity=sys.light.intensity*L.lvl;}need=true;
@@ -451,7 +468,7 @@ window.applyFrame=function(f){_applyFrame(f);if(!S.playing)evalAll(f);};
 on('tick',dt=>{
   if(S.playing||!FX.preview||S.ws!=='fx')return;const live=FX.systems.length||FURS.size;if(!live)return;
   const d=Math.min(dt,0.05);FX.clock+=d;TIME.value=FX.clock;
-  FX.systems.forEach(s=>{if(EVAL[s.kind])EVAL[s.kind](s,FX.clock*S.fps+(s.kind==='bolt'||s.kind==='beam'?s.startFrame||0:0));else{step(s,d);upload(s);}});need=true;
+  FX.systems.forEach(s=>{if(EVAL[s.kind])EVAL[s.kind](s,FX.clock*S.fps+(FXK.LOOP.has(s.kind)?s.startFrame||0:0));else{step(s,d);upload(s);}});need=true;
 });
 
 /* ===== Gramado / pelo / cabelo: lâminas curvas com vento ===== */
@@ -622,11 +639,12 @@ function panelFX(P){
   const add=k=>{const s=makeSystem(k,S.sel?S.sel.id:null),grp=FX.systems.filter(x=>x.group===s.group);
     push(()=>{grp.forEach(destroy);FX.systems=FX.systems.filter(x=>!grp.includes(x));renderPanel();need=true;},()=>{grp.forEach(x=>{build(x);FX.systems.push(x);resetSim(x);});renderPanel();});
     renderPanel();toast(PRESETS[k].name+(s.emitter!=null&&S.sel?' em '+S.sel.name:''));};
-  P.append(row(lb('Efeitos'),...Object.keys(PRESETS).map(k=>chip(PRESETS[k].name,()=>add(k))),chip('Gramado',()=>{makeLawn(5);renderPanel();toast('Gramado criado');},false,'act')));
+  if(FXK.TOP)FXK.TOP(P,add);
+  P.append(row(lb('Efeitos'),...Object.keys(PRESETS).filter(k=>!PRESETS[k].hidden).map(k=>chip(PRESETS[k].name,()=>add(k))),chip('Gramado',()=>{makeLawn(5);renderPanel();toast('Gramado criado');},false,'act')));
   if(FX.systems.length){
     if(FX.sel<0||FX.sel>=FX.systems.length)FX.sel=0;const s=FX.systems[FX.sel];
     const sel=h('select',{class:'field',onchange:e=>{FX.sel=+e.target.value;renderPanel();}});FX.systems.forEach((x,i)=>{const op=h('option',{value:i},x.name);if(i===FX.sel)op.selected=true;sel.append(op);});
-    P.append(row(lb('Camada'),sel,chip(FX.preview?'Prévia ao vivo':'Prévia parada',()=>{FX.preview=!FX.preview;renderPanel();},FX.preview,'cy'),chip('Reiniciar',()=>FX.systems.forEach(resetSim)),
+    P.append(row(lb('Camada'),sel,chip(FX.preview?'Prévia ao vivo':'Prévia parada',()=>{FX.preview=!FX.preview;renderPanel();},FX.preview,'cy'),chip('Reiniciar',()=>{FX.clock=0;FX.systems.forEach(s=>resetSim(s));}),
       chip('Emissor = selecionado',()=>{FX.systems.filter(x=>x.group===s.group).forEach(x=>{x.emitter=S.sel?S.sel.id:null;resetSim(x);});toast(S.sel?'Emissor: '+S.sel.name:'Emissor: origem');}),
       chip('Apagar camada',()=>{removeSystem(s,false);renderPanel();}),chip('Apagar efeito todo',()=>{removeSystem(s,true);renderPanel();})));
     const sl=(t,k,a,b,st,fmt)=>slider(t,a,b,st,s[k]==null?0:s[k],v=>{s[k]=v;rebuildMat(s);},fmt);
@@ -636,6 +654,7 @@ function panelFX(P){
       P.append(sl('Intervalo (quadros)','period',4,240,1),sl('Duração (quadros)','duration',2,30,1),sl('Altura','height',1,30,0.1),sl('Zigue-zague','jag',0.1,2.5,0.01),sl('Ramos','branches',0,14,1),sl('Espessura','width',0.02,0.8,0.005),sl('Espalhar no chão','spreadXZ',0,12,0.1),
         slider('Força do clarão',0,300,1,s.light.intensity,v=>s.light.intensity=v),sl('Começa no quadro','startFrame',0,S.endFrame,1));
       P.append(h('div',{class:'note'},'O raio cai no objeto emissor (ou no chão) a cada intervalo. Aumente o Bloom na aba Render para o brilho estourar como em foto.'));
+    }else if(FXK.PANEL[s.kind]){FXK.PANEL[s.kind](P,s,sl,FX.systems.filter(x=>x.group===s.group));
     }else if(['veins','core','shards','arcs','beam'].includes(s.kind)){
       const grp=FX.systems.filter(x=>x.group===s.group),all=(k,v)=>grp.forEach(x=>{if(x[k]!==undefined)x[k]=v;});
       P.append(row(lb('Cor da energia'),colorIn(s.c0,v=>{grp.forEach(x=>{if(x.kind==='star'){x.c1=v;}else x.c0=v;if(x.light)x.light.color=v;});}),h('span',{class:'note'},'muda o efeito todo'),
@@ -683,7 +702,17 @@ function panelFX(P){
   P.append(row(chip('Chão',()=>{physOpt.ground=!physOpt.ground;renderPanel();},physOpt.ground,'cy'),chip('Colisão entre objetos',()=>{physOpt.collide=!physOpt.collide;renderPanel();},physOpt.collide,'cy')));
   P.append(slider('Gravidade',0,30,0.1,physOpt.gravity,v=>physOpt.gravity=v),slider('Quique',0,0.95,0.01,physOpt.bounce,v=>physOpt.bounce=v),slider('Atrito',0,0.5,0.005,physOpt.friction,v=>physOpt.friction=v),
     slider('Giro',0,15,0.1,physOpt.spin,v=>physOpt.spin=v),slider('Empurrão inicial',0,10,0.1,physOpt.kick,v=>physOpt.kick=v),slider('Explosão (força)',0,15,0.1,physOpt.explode,v=>physOpt.explode=v),slider('Pedaços (estilhaçar)',3,60,1,physOpt.pieces||14,v=>physOpt.pieces=v));
+  if(FXK.BOTTOM)FXK.BOTTOM(P);
 }
+// Ganchos para módulos de efeito extras (js/weapons.js): novos tipos, painéis e limpeza.
+// Bake para exportação (FBX): transforma camadas com malha em nós animados quadro a quadro.
+const BAKE={shards(sys,nF){
+  if(!sys._sh)return [];const g=new THREE.OctahedronGeometry(1,0);g.scale(0.38,1,0.38);const pa=g.attributes.position,pos=[],polys=[];for(let i=0;i<pa.count;i++)pos.push(pa.getX(i),pa.getY(i),pa.getZ(i));for(let i=0;i<pa.count;i+=3)polys.push([i,i+1,i+2]);
+  const q=new THREE.Quaternion();return sys._sh.map((h,i)=>{const frames=[];for(let f=0;f<=nF;f++){const t=f/S.fps,L=level(sys,f),B=emitterBox(sys),grow=0.3+0.7*L.act,rad=(B.r+0.15)*sys.orbit,a=h.a+t*sys.speed*h.sp;
+      q.setFromAxisAngle(h.ax,t*h.tw+h.ph);const sc=sys.size*h.s*(0.25+0.75*L.lvl);
+      frames.push({p:[B.c.x+Math.cos(a)*rad*h.rf*grow,B.c.y+h.hf*(B.h+0.1)*grow+Math.sin(t*1.3+h.ph)*0.05,B.c.z+Math.sin(a)*rad*h.rf*grow],q:q.toArray(),s:[sc,sc,sc]});}
+    return {name:'Cristal_'+(i+1),parent:null,geo:{pos,polys},mat:{color:'#2a1c40',emissive:sys.c0,emissiveI:0.6},frames};});}};
+window.FXK={BAKE,evalAll:f=>evalAll(f),PRESETS,BUILD,EVAL,PANEL:{},DESTROY:{},LOOP:new Set(['bolt','beam']),TOP:null,mkMesh,boltMesh,setSegs,jagPath,rng,level,emitterBase,emitterBox,sampleLocal,TIME,VEIN_GLSL,makeSystem,resetSim,destroy,build};
 PANELS_EXT.fx=panelFX;
 TABS.splice(TABS.findIndex(t=>t[0]==='anim'),0,['fx','Efeitos']);
 })();

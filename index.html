@@ -88,7 +88,7 @@ input[type=color]{width:42px;height:32px;border:1px solid var(--ln);background:v
 <div id="toast"></div>
 <div id="sheet"><div id="sheetIn"></div></div>
 <input type="file" id="fileIn" accept=".json,application/json" hidden>
-<input type="file" id="modelIn" accept=".glb,.gltf,.obj" hidden>
+<input type="file" id="modelIn" accept=".glb,.gltf,.obj,.fbx" multiple hidden>
 <input type="file" id="baseIn" accept="image/*" hidden>
 <input type="file" id="normalIn" accept="image/*" hidden>
 <input type="file" id="roughIn" accept="image/*" hidden>
@@ -100,6 +100,8 @@ input[type=color]{width:42px;height:32px;border:1px solid var(--ln);background:v
 <script src="vendor/GLTFExporter.js"></script>
 <script src="vendor/GLTFLoader.js"></script>
 <script src="vendor/OBJLoader.js"></script>
+<script src="vendor/fflate.min.js"></script>
+<script src="vendor/FBXLoader.js"></script>
 <script>
 'use strict';
 /*GEO-START*/
@@ -446,7 +448,15 @@ function createObject(name,em,o2){
   const mat=new THREE.MeshStandardMaterial({color:0xcccccc,roughness:0.5,metalness:0,vertexColors:true,flatShading:!!(o2&&o2.flat),polygonOffset:true,polygonOffsetFactor:1,polygonOffsetUnits:1});
   const mesh=new THREE.Mesh(buildGeo(em),mat);mesh.castShadow=mesh.receiveShadow=true;
   const o={id:++S.uid,name,em,mesh,mat,flat:!!(o2&&o2.flat),params:{color:'#c8c8c8',metal:0,rough:0.5,emis:'#000000',emisI:1,alpha:1},graph:null,keys:{},ext:{},ov:null,ovSel:null,adj:null,edges:[],dirty:false,rig:null,uvMode:'unwrap',uvData:null,uvCorners:null,uvSeams:[],uvSeamsInitialized:false,uvChartCount:0,textureData:{base:null,normal:null,roughness:null,metalness:null,ao:null},_textureRefs:{}};
-  mesh.name='obj_'+o.id;mesh.userData.obj=o;scene.add(mesh);S.objs.push(o);uvUnwrap(o);setGeometryUV(o,'unwrap');
+  mesh.name='obj_'+o.id;mesh.userData.obj=o;scene.add(mesh);S.objs.push(o);
+  if(o2&&o2.uvCorners){// UVs que vieram do arquivo importado
+    o.uvCorners=o2.uvCorners;o.uvTopology=em.faces.map(f=>f.join(',')).join(';');o.uvSeamsInitialized=true;o.uvMode='import';setGeometryUV(o,'import');
+  }else if(em.faces.length>150000){// malha enorme: projeção plana rápida em vez do unwrap automático (que levaria minutos)
+    let a=[Infinity,Infinity,Infinity],c=[-Infinity,-Infinity,-Infinity];for(let k=0;k<em.pos.length;k+=3)for(let j=0;j<3;j++){if(em.pos[k+j]<a[j])a[j]=em.pos[k+j];if(em.pos[k+j]>c[j])c[j]=em.pos[k+j];}
+    const sx=1/Math.max(1e-6,c[0]-a[0]),sz=1/Math.max(1e-6,c[2]-a[2]),q=v=>[(em.pos[3*v]-a[0])*sx,1-(em.pos[3*v+2]-a[2])*sz],uc=[];
+    em.faces.forEach(f=>{for(let k=1;k<f.length-1;k++)uc.push(q(f[0]),q(f[k]),q(f[k+1]));});
+    o.uvCorners=uc;o.uvTopology=em.faces.map(f=>f.join(',')).join(';');o.uvSeamsInitialized=true;setGeometryUV(o,'unwrap');
+  }else{uvUnwrap(o);setGeometryUV(o,'unwrap');}
   if(S.wire)mat.wireframe=true;
   return o;
 }
@@ -523,7 +533,7 @@ function applyPBRData(o,key,data){
     o.mat.needsUpdate=true;need=true;
   };im.onerror=()=>toast('Não foi possível carregar este mapa');im.src=data;
 }
-function attachPBRInput(id,key){$('#'+id).addEventListener('change',e=>{const f=e.target.files[0],o=S.sel;if(!f||!o)return;if(f.size>20*1024*1024){toast('Imagem acima de 20 MB. Reduza o arquivo antes de importar.');e.target.value='';return;}imageData(f,data=>{o.textureData=o.textureData||{};o.textureData[key]=data;applyPBRData(o,key,data);toast('Mapa '+key+' importado');});e.target.value='';});}
+function attachPBRInput(id,key){$('#'+id).addEventListener('change',e=>{const f=e.target.files[0],o=S.sel;if(!f||!o)return;imageData(f,data=>{o.textureData=o.textureData||{};o.textureData[key]=data;applyPBRData(o,key,data);toast('Mapa '+key+' importado');});e.target.value='';});}
 function clearPBRMap(o,key){
   if(!o)return;o.textureData=o.textureData||{};o.textureData[key]=null;
   if(o._textureRefs&&o._textureRefs[key]){o._textureRefs[key].dispose();delete o._textureRefs[key];}
@@ -1459,8 +1469,8 @@ function weldGeometry(g,tol){
   const vtx=i=>{const x=pa.getX(i),y=pa.getY(i),z=pa.getZ(i),k=Math.round(x*inv)+','+Math.round(y*inv)+','+Math.round(z*inv);let id=map.get(k);
     if(id===undefined){id=pos.length/3;map.set(k,id);pos.push(x,y,z);if(co)col.push(co.getX(i),co.getY(i),co.getZ(i));else col.push(1,1,1);}return id;};
   for(let c=0;c<n;c++)corner[c]=vtx(idx?idx[c]:c);
-  const faces=[];for(let c=0;c+2<n;c+=3){const f=[corner[c],corner[c+1],corner[c+2]];if(f[0]!==f[1]&&f[1]!==f[2]&&f[0]!==f[2])faces.push(f);}
-  return {pos,col,faces};
+  const faces=[],tri=[];for(let c=0;c+2<n;c+=3){const f=[corner[c],corner[c+1],corner[c+2]];if(f[0]!==f[1]&&f[1]!==f[2]&&f[0]!==f[2]){faces.push(f);tri.push(c/3);}}
+  return {pos,col,faces,tri};
 }
 // Junta pares de triângulos coplanares em quads (melhor para subdivisão e loop cut).
 function trisToQuads(em,maxAngleDeg){
@@ -1488,21 +1498,22 @@ function importMeshes(root,baseName){
     if(!x.isMesh||!x.geometry||!x.geometry.attributes.position)return;
     const g=x.geometry.clone();g.applyMatrix4(x.matrixWorld);
     const em=weldGeometry(g);if(!em.faces.length)return;
-    // OBJ/GLB não trazem cores por vértice na maioria das vezes: usa a cor do material.
     const srcMat=Array.isArray(x.material)?x.material[0]:x.material;
-    const o=createObject(x.name&&!/^obj_\d+(_mod)?$/.test(x.name)?x.name:baseName+(made.length?' '+(made.length+1):''),em,{flat:false});
+    // UVs originais do arquivo, por canto de triângulo (na mesma ordem das faces que sobraram da solda).
+    let corners=null;
+    if(g.attributes.uv){const uv=g.attributes.uv,ix=g.index?g.index.array:null;corners=[];
+      for(const t of em.tri)for(let j=0;j<3;j++){const i=ix?ix[t*3+j]:t*3+j;corners.push([uv.getX(i),1-uv.getY(i)]);}}
+    const o=createObject(x.name&&!/^obj_\d+(_mod)?$/.test(x.name)?x.name:baseName+(made.length?' '+(made.length+1):''),{pos:em.pos,col:em.col,faces:em.faces},{flat:false,uvCorners:corners});
+    // cor por vértice é rara em OBJ/GLB/FBX: usa a cor do material.
     if(srcMat&&srcMat.color)o.params.color='#'+srcMat.color.getHexString();else o.params.color='#ffffff';
     if(srcMat){if(srcMat.metalness!=null)o.params.metal=srcMat.metalness;if(srcMat.roughness!=null)o.params.rough=srcMat.roughness;}
     applyMaterial(o);
-    // Textura base do GLB: reaproveita os UVs originais por canto de triângulo.
-    if(srcMat&&srcMat.map&&srcMat.map.image&&g.attributes.uv){
-      try{const uv=g.attributes.uv,ix=g.index?g.index.array:null,n=ix?ix.length:uv.count,corners=[];
-        for(let c=0;c+2<n;c+=3){const t=[0,1,2].map(j=>{const i=ix?ix[c+j]:c+j;return [uv.getX(i),uv.getY(i)];});const v=[0,1,2].map(j=>{const i=ix?ix[c+j]:c+j;return i;});corners.push(t);}
-        if(corners.length===em.faces.length){o.uvCorners=corners.flat();o.uvTopology=o.em.faces.map(f=>f.join(',')).join(';');o.uvMode='import';setGeometryUV(o,'import');
-          const cvs=document.createElement('canvas'),im=srcMat.map.image;cvs.width=im.width;cvs.height=im.height;cvs.getContext('2d').drawImage(im,0,0);
-          const data=cvs.toDataURL('image/png');o.textureData.base=data;applyPBRData(o,'base',data);}
-      }catch(err){console.warn('textura importada',err);}
-    }
+    // textura base embutida no arquivo
+    const im=srcMat&&srcMat.map&&srcMat.map.image;
+    if(im&&corners&&im.width){try{const cvs=document.createElement('canvas');cvs.width=im.width;cvs.height=im.height;const cx=cvs.getContext('2d');
+        // os UVs foram convertidos para v-para-baixo; texturas glTF já vêm assim (flipY=false), as demais precisam virar
+        if(srcMat.map.flipY===false){cx.translate(0,im.height);cx.scale(1,-1);}cx.drawImage(im,0,0);
+        const data=cvs.toDataURL('image/png');o.textureData.base=data;applyPBRData(o,'base',data);}catch(err){console.warn('textura importada',err);}}
     made.push(o);
   });
   return made;
@@ -1516,16 +1527,26 @@ function placeImported(list){
   selectObj(list[list.length-1]);$('#fFrame').click();
   push(()=>list.forEach(o=>removeObj(o,true)),()=>list.forEach(o=>{scene.add(o.mesh);S.objs.push(o);selectObj(o);}));
 }
-$('#modelIn').addEventListener('change',e=>{
-  const f=e.target.files[0];if(!f)return;const ext=f.name.split('.').pop().toLowerCase(),base=f.name.replace(/\.(glb|gltf|obj)$/i,'');
-  const done=list=>{if(!list.length)return toast('Nenhuma malha encontrada no arquivo');placeImported(list);
-    const v=list.reduce((a,o)=>a+o.em.pos.length/3,0);toast(list.length+' malha(s) importada(s), '+v+' vértices soldados. Use Editar › Tris→Quads para limpar.',3500);};
-  if(ext==='obj'){const r=new FileReader();r.onload=()=>{try{done(importMeshes(new THREE.OBJLoader().parse(r.result),base));}catch(err){toast('Não foi possível abrir OBJ: '+err.message);}};r.readAsText(f);}
-  else if(ext==='glb'||ext==='gltf'){
-    const r=new FileReader();r.onload=()=>{try{new THREE.GLTFLoader().parse(r.result,'',g=>{done(importMeshes(g.scene,base));if(g.animations&&g.animations.length)toast('Animações/rig do arquivo não são importados; crie o rig na aba Rig.',3500);},err=>toast('Falha ao importar GLB/glTF'));}catch(err){toast('Falha ao importar: '+err.message);}};
-    if(ext==='glb')r.readAsArrayBuffer(f);else r.readAsText(f);
+// Sem limite de tamanho no app: o arquivo é lido direto do aparelho (o teto é só a memória do navegador).
+$('#modelIn').addEventListener('change',async e=>{
+  const files=[...e.target.files];e.target.value='';if(!files.length)return;const all=[];
+  const read=(f,as)=>new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=()=>rej(r.error||new Error('falha ao ler'));as==='text'?r.readAsText(f):r.readAsArrayBuffer(f);});
+  for(const f of files){
+    const ext=f.name.split('.').pop().toLowerCase(),base=f.name.replace(/\.(glb|gltf|obj|fbx)$/i,''),mb=(f.size/1048576).toFixed(1);
+    toast('Lendo '+f.name+' ('+mb+' MB)…',60000);await new Promise(r=>setTimeout(r,30));
+    try{
+      let root=null,anim=false;
+      if(ext==='obj')root=new THREE.OBJLoader().parse(await read(f,'text'));
+      else if(ext==='fbx'){if(!THREE.FBXLoader)throw new Error('leitor de FBX não carregou');root=new THREE.FBXLoader().parse(await read(f,'buffer'),'');anim=!!(root.animations&&root.animations.length);}
+      else if(ext==='glb'||ext==='gltf'){const data=await read(f,ext==='glb'?'buffer':'text');const g=await new Promise((res,rej)=>new THREE.GLTFLoader().parse(data,'',res,rej));root=g.scene;anim=!!(g.animations&&g.animations.length);}
+      else throw new Error('formato não suportado (.'+ext+')');
+      const list=importMeshes(root,base);if(!list.length)throw new Error('nenhuma malha no arquivo');all.push(...list);
+      if(anim)console.info('animações/rig do arquivo não são importados');
+    }catch(err){console.error(err);toast('Falha em '+f.name+': '+(err&&err.message||err),5000);}
   }
-  e.target.value='';
+  if(!all.length)return;placeImported(all);
+  const v=all.reduce((a,o)=>a+o.em.pos.length/3,0),fc=all.reduce((a,o)=>a+o.em.faces.length,0);
+  toast(all.length+' malha(s) importada(s): '+v.toLocaleString()+' vértices, '+fc.toLocaleString()+' faces.',4000);
 });
 
 /* ===== Interface ===== */
@@ -2033,8 +2054,10 @@ function openMenu(){
     btn('Projetos salvos / Salvar como…',openProjects);
     btn('Salvar arquivo (.json)',()=>dl((S.projectName||'miniblender-projeto').replace(/[^\w\-]+/g,'_')+'.json',new Blob([JSON.stringify(serializeAll())],{type:'application/json'})));
     btn('Abrir arquivo (.json)',()=>$('#fileIn').click());
-    btn('Importar modelo 3D (.GLB / .OBJ)',()=>$('#modelIn').click());
+    btn('Importar modelo 3D (.GLB / .glTF / .OBJ / .FBX) — sem limite de tamanho',()=>$('#modelIn').click());
     btn('Exportar OBJ',exportOBJ);
+    btn('Exportar FBX (malhas, efeitos em malha e animação)',()=>window.exportFBX&&exportFBX());
+    btn('Exportar flipbook do efeito (PNG transparente)',()=>window.exportFlipbook&&exportFlipbook());
     btn('Exportar GLB (com animação)',exportGLB);
     b.append(slider('Zona morta (órbita)',0,40,1,S.dead,v=>S.dead=v,v=>v+'px'));
     b.append(row(lb('Qualidade'),...[[1,'Baixa'],[1.5,'Média'],[2,'Alta']].map(([k,n])=>chip(n,()=>{S.quality=k;renderer.setPixelRatio(Math.min(devicePixelRatio||1,k));resize();closeSheet();toast('Qualidade: '+n);},S.quality===k))));
@@ -2076,6 +2099,8 @@ async function boot(){
 <script src="js/modifiers.js"></script>
 <script src="js/scene.js"></script>
 <script src="js/effects.js"></script>
+<script src="js/weapons.js"></script>
+<script src="js/export.js"></script>
 <script src="js/character.js"></script>
 <script src="js/api.js"></script>
 <script src="js/claude.js"></script>

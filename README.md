@@ -14,15 +14,22 @@ Abra `index.html` por um servidor (veja [Rodar](#rodar)) e toque nas abas de bai
 | **Esculpir** | Draw, Clay, Layer, Smooth, Flatten, Crease, Grab, Inflate, Pinch, Snake Hook, **Máscara**; simetria; **pressão da caneta** (força ou raio); **Remesh por voxel** |
 | **Material** | PBR, pintura por vértice, editor UV com costuras, mapas Base/Normal/Roughness/Metallic/AO |
 | **Nós** | Principled BSDF + **Noise, Voronoi, Xadrez, Tijolos, Gradiente, Color Ramp**, Inverter, Matemática (×, +, −, ÷, ^, mín, máx, onda). As texturas procedurais são calculadas em 3D e gravadas numa textura (sem costura) |
-| **Efeitos** | **Natureza**: fogo (línguas de chama + brasas + fumaça + luz tremulando), explosão, fumaça, faíscas, **raio** ramificado com clarão, **chuva** com respingos, neve, fonte de água, **água (lago/mar)** com ondas e reflexo do sol, **gramado** com vento. **Energia (estilo skin de jogo)**: "Skin de energia" (veias pulsando na peça, núcleo com anéis, cristais orbitando, raios na superfície, partículas e sequência de ativação) e "Tiro de energia". Pelo/cabelo, **física de corpo rígido** e **estilhaçar + explodir** |
+| **Efeitos** | **Natureza**: fogo (línguas de chama + brasas + fumaça + luz tremulando), explosão, fumaça, faíscas, **raio** ramificado com clarão, **chuva** com respingos, neve, fonte de água, **água (lago/mar)** com ondas e reflexo do sol, **gramado** com vento. **Energia (estilo skin de jogo)**: "Skin de energia" (veias pulsando na peça, núcleo com anéis, cristais orbitando, raios na superfície, partículas e sequência de ativação) e "Tiro de energia". Pelo/cabelo, **física de corpo rígido** e **estilhaçar + explodir** **Armas**: modelos prontos (fuzil, pistola, sniper), **disparo** (clarão na boca, traçante, fumaça, cápsulas ejetadas, faíscas no impacto; automático, rajada ou tiro a tiro) e **arma fragmentada** (a malha se parte em pedaços flutuantes com rachaduras brilhando, raios internos e núcleo). **Exportar efeito** em FBX ou flipbook PNG |
 | **Animar** | Timeline, keyframes, FPS, **gravar vídeo WebM** |
 | **Rig / Ossos** | Ossos, pintura de pesos com **mapa de calor**, espelhar pesos/pose E→D, IK de 2 ossos, caminhar/correr/saltar prontos |
 | **Render** | Render com bloom, vinheta, aberração, saturação e contraste |
 | **Claude 🔌** | Assistente Claude dentro do app, conector MCP e plugins |
 
-Menu ☰: projetos salvos no aparelho, importar GLB/glTF/OBJ e exportar GLB (com animação e modificadores), OBJ e JSON.
+Menu ☰: projetos salvos no aparelho, importar GLB/glTF/OBJ/**FBX** (vários arquivos de uma vez, **sem limite de tamanho**) e exportar GLB, OBJ, **FBX**, flipbook e JSON.
 
 ## O que mudou nesta versão
+
+### Efeitos de arma e exportação
+- **Disparo de arma**: cada bala sai de onde a arma estava no quadro do tiro (funciona com a arma animada), acerta o primeiro objeto ou o chão e solta faíscas e poeira. Tudo é calculado direto do quadro, então dá para voltar e avançar a timeline.
+- **Arma fragmentada**: funciona em qualquer objeto, sem alterar a malha original. Apagar o efeito traz a peça inteira de volta.
+- **Exportar FBX** (ASCII 7.4): malhas, cores por vértice, UVs, materiais com emissão e animação por nó. Os efeitos que são malha (pedaços, cristais, balas, cápsulas) saem como nós animados quadro a quadro.
+- **Exportar flipbook**: folha de sprites PNG com transparência + `.json` com colunas, linhas e fps. É para o que é shader/partícula (clarão, fumaça, faíscas, raios, núcleo, fogo), que um FBX não consegue guardar.
+- **Importar sem limite**: saiu o teto de 20 MB das texturas; o import aceita FBX e mantém os UVs e a textura do arquivo. O limite que resta é a memória do aparelho.
 
 ### Personagens e efeitos realistas
 - **Personagem**: saiu o boneco de cápsulas; entrou a malha humana do MakeHuman (13,5 mil vértices) com os morphs originais. Os fios de cabelo seguem a cabeça na animação. Subdividir o personagem preserva a textura de pele.
@@ -85,7 +92,7 @@ Quando o Claude Desktop/Code inicia o servidor, peça ao Claude: *"use miniblend
 
 **Segurança:** o token é gerado uma vez e fica em `~/.miniblender-mcp.json`. Ele é exigido no `/mcp` e na ponte `/bridge`. Opções: `--port 8765`, `--token SEGREDO`, `--no-stdio`.
 
-**Ferramentas disponíveis (31):** `get_scene`, `view_scene` (foto da cena), `add_primitive`, `create_character`, `select_object`, `transform_object`, `delete_object`, `duplicate_object`, `rename_object`, `set_material`, `set_procedural_texture`, `add_modifier`, `apply_modifiers`, `edit_mesh`, `sculpt_stroke`, `paint_vertices`, `add_light`, `set_world`, `set_view`, `add_camera`, `add_particles` (fogo, raio, chuva, água, skin de energia, tiro…), `add_lawn`, `add_fur`, `physics`, `rig`, `set_pose`, `animate`, `render` (imagem final), `project` (salvar/exportar/desfazer), `run_script` (desligado por padrão) e `miniblender_status`. As definições ficam em `js/tools.js` e servem tanto ao app quanto ao servidor.
+**Ferramentas disponíveis (32):** `get_scene`, `view_scene` (foto da cena), `add_primitive`, `create_character`, `select_object`, `transform_object`, `delete_object`, `duplicate_object`, `rename_object`, `set_material`, `set_procedural_texture`, `add_modifier`, `apply_modifiers`, `edit_mesh`, `sculpt_stroke`, `paint_vertices`, `add_light`, `set_world`, `set_view`, `add_camera`, `add_particles` (fogo, raio, chuva, água, skin de energia, tiro…), `create_weapon`, `add_lawn`, `add_fur`, `physics`, `rig`, `set_pose`, `animate`, `render` (imagem final), `project` (salvar/exportar/desfazer), `run_script` (desligado por padrão) e `miniblender_status`. As definições ficam em `js/tools.js` e servem tanto ao app quanto ao servidor.
 
 ## Plugins
 
@@ -120,6 +127,8 @@ js/tools.js           definições das ferramentas (app + MCP)
 js/modifiers.js       pilha de modificadores
 js/scene.js           luzes, câmeras, mundo
 js/effects.js         partículas com shaders, raio, água, gramado, skin de energia, pelo, física
+js/weapons.js         modelos de arma, disparo (traçante, cápsulas, impacto) e arma fragmentada
+js/export.js          exportador FBX e flipbook de efeitos
 js/character.js       personagem humano (malha MakeHuman + morphs + textura + rig) e remesh por voxel
 assets/               human.bin.gz (malha, UVs, morphs, juntas) e texturas de pele
 tools/build_human.py  gera os assets a partir dos dados do MakeHuman

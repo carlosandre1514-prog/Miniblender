@@ -120,6 +120,7 @@ const H={
   add_particles(a){if(!FX_PRESETS[a.preset])throw new Error('preset inválido');const em=a.emitter_id!=null?getObj({id:a.emitter_id}).id:null;
     const s=makeFX(a.preset,em),grp=FX.systems.filter(x=>x.group===s.group);if(a.offset)grp.forEach(x=>x.offset=a.offset.slice());Object.assign(s,a.params||{});grp.forEach(x=>fxRebuildMat(x));applyFrame(S.frame);renderPanel();
     return text({effect:s.name,layers:grp.map(x=>x.name),emitter:s.emitter,tip:'O efeito anima na timeline: use animate set_frame (ex.: 30) antes de view_scene/render para vê-lo formado.'});},
+  create_weapon(a){const o=createWeapon(a.type);if(a.position)o.mesh.position.fromArray(a.position);if(a.rotation_deg)o.mesh.rotation.set(...a.rotation_deg.map(rad));hud();renderPanel();return text({created:describe(o),muzzle_local:o.ext.weapon.muzzle,tip:'add_particles preset gunfire/fracture com emitter_id '+o.id});},
   add_lawn(a){const o=makeLawn(a.size||5);if(a.position)o.mesh.position.fromArray(a.position);if(a.count){o.ext.fur.count=a.count;buildFur(o);}renderPanel();return text({created:describe(o)});},
   add_fur(a){const o=getObj(a);const F=o.ext.fur={...FUR_DEF,...(FUR_STYLES[a.style||'pelo']||{}),seed:Math.floor(Math.random()*1e6)};
     if(a.count)F.count=a.count;if(a.length)F.length=a.length;if(a.root)F.root=a.root;if(a.tip)F.tip=a.tip;buildFur(o);renderPanel();return text({fur:F});},
@@ -146,6 +147,8 @@ const H={
     case 'save':await saveLocal(false,a.name);return text('Salvo no aparelho como '+S.projectName);
     case 'new':saveLocal(true);clearScene();S.projectName=a.name||'Sem título';addPrim('cube',true);selectObj(S.objs[0]);return text('Projeto novo');
     case 'export_glb':exportGLB();return text('GLB exportado (download)');case 'export_obj':exportOBJ();return text('OBJ exportado');
+    case 'export_fbx':{const r=exportFBX();return text({file:(S.projectName||'miniblender')+'.fbx',meshes:r.nodes.filter(n=>n.geo).length,animated:r.animated,nodes:r.nodes.slice(0,40).map(n=>n.name)});}
+    case 'export_flipbook':{const r=await exportFlipbook(a.flipbook||{});return [{type:'image',mediaType:'image/png',data:r.canvas.toDataURL('image/png').split(',')[1]},{type:'text',text:'Flipbook '+r.cols+'x'+r.rows+', '+r.frames+' quadros de '+r.size+'px'}];}
     case 'export_json':dl((S.projectName||'projeto')+'.json',new Blob([JSON.stringify(serializeAll())],{type:'application/json'}));return text('JSON exportado');
     case 'undo':doUndo();return text('Desfeito');case 'redo':doRedo();return text('Refeito');
     case 'set_tab':setWs(a.tab);return text('Aba '+a.tab);}},
