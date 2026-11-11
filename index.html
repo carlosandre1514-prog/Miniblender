@@ -321,6 +321,8 @@ function laplacianSmooth(em,iters,lambda,only){
 }
 /*GEO-END*/
 
+// Endereço de um arquivo do app. Na versão de arquivo único (tools/build_single.py) os arquivos vêm embutidos em MB_ASSETS.
+const mbAsset=p=>(window.MB_ASSETS&&window.MB_ASSETS[p])||new URL(p,document.baseURI).href;
 /* ===== Ganchos para módulos (js/*.js) e plugins ===== */
 const HOOKS={};
 function on(ev,fn){(HOOKS[ev]=HOOKS[ev]||[]).push(fn);}

@@ -26,7 +26,7 @@ Responda em português do Brasil, curto e direto, dizendo o que você fez.`;
 
 async function sdk(){
   if(C.mod)return C.mod;
-  C.mod=await import(new URL('vendor/anthropic-sdk.mjs',document.baseURI).href);return C.mod;
+  C.mod=await import(mbAsset('vendor/anthropic-sdk.mjs'));return C.mod;
 }
 function toApiContent(blocks){return blocks.map(b=>b.type==='image'?{type:'image',source:{type:'base64',media_type:b.mediaType||'image/jpeg',data:b.data}}:{type:'text',text:b.text});}
 function tools(){return MB_TOOLS.filter(t=>t.name!=='run_script'||API.allowScripts).map(t=>({name:t.name,description:t.description,input_schema:t.input_schema}));}
@@ -106,7 +106,7 @@ function panelClaude(P){
   P.append(h('div',{class:'lb'},'Plugins'));
   const fileIn=h('input',{type:'file',accept:'.js,text/javascript',hidden:true,onchange:e=>{const f=e.target.files[0];if(!f)return;f.text().then(code=>{API.installPlugin(code,f.name);renderPanel();});e.target.value='';}});
   P.append(fileIn,row(chip('Instalar plugin (.js)',()=>fileIn.click(),false,'act'),chip('Instalar de URL',async()=>{const u=prompt('URL do plugin .js');if(!u)return;try{const r=await fetch(u);if(!r.ok)throw new Error(r.status);API.installPlugin(await r.text(),u);renderPanel();}catch(e){toast('Falha ao baixar: '+e.message);}}),
-    chip('Exemplo',async()=>{try{const r=await fetch(new URL('plugins/exemplo-escada.js',document.baseURI));API.installPlugin(await r.text(),'exemplo-escada.js');renderPanel();}catch(e){toast('Exemplo indisponível');}})));
+    chip('Exemplo',async()=>{try{const r=await fetch(mbAsset('plugins/exemplo-escada.js'));API.installPlugin(await r.text(),'exemplo-escada.js');renderPanel();}catch(e){toast('Exemplo indisponível');}})));
   const list=API.savedPlugins();
   list.forEach(p=>P.append(row(h('span',{class:'note',style:'flex:1'},'🧩 '+p.label+(API.plugins.length?'':'')),chip('Remover',()=>{API.removePlugin(p.label);renderPanel();}))));
   if(!list.length)P.append(h('div',{class:'note'},'Plugins são arquivos .js que chamam MiniBlender.registerPlugin({...}) para criar abas e ferramentas novas — que o Claude também pode usar. Instale só plugins em que você confia: eles rodam dentro do app.'));

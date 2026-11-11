@@ -16,11 +16,11 @@
 const V=(x,y,z)=>new THREE.Vector3(x,y,z);
 let HUMAN=null,loading=null;
 const IMG={};
-function loadImage(name){return IMG[name]?Promise.resolve(IMG[name]):new Promise((res,rej)=>{const im=new Image();im.onload=()=>{IMG[name]=im;res(im);};im.onerror=()=>rej(new Error('não consegui carregar assets/'+name+'.jpg'));im.src=new URL('assets/'+name+'.jpg',document.baseURI).href;});}
+function loadImage(name){return IMG[name]?Promise.resolve(IMG[name]):new Promise((res,rej)=>{const im=new Image();im.onload=()=>{IMG[name]=im;res(im);};im.onerror=()=>rej(new Error('não consegui carregar assets/'+name+'.jpg'));im.src=mbAsset('assets/'+name+'.jpg');});}
 async function loadHuman(){
   if(HUMAN)return HUMAN;if(loading)return loading;
   loading=(async()=>{
-    const resp=await fetch(new URL('assets/human.bin.gz',document.baseURI));if(!resp.ok)throw new Error('assets/human.bin.gz não encontrado ('+resp.status+')');
+    const resp=await fetch(mbAsset('assets/human.bin.gz'));if(!resp.ok)throw new Error('assets/human.bin.gz não encontrado ('+resp.status+')');
     let buf;
     // Alguns servidores já descomprimem .gz sozinhos (Content-Encoding); confere a assinatura gzip.
     const raw=await resp.arrayBuffer(),sig=new Uint8Array(raw,0,2);
